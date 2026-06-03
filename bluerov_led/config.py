@@ -1,0 +1,186 @@
+"""Project paths, face patterns, and vision pipeline configuration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Unity RovLeds.cs pattern strings (same phase for both LEDs on a face).
+FACE_PATTERNS: dict[str, str] = {
+    "FRONT": "11110000",
+    "BACK": "11001100",
+    "LEFT": "10101010",
+    "RIGHT": "10011001",
+}
+
+
+@dataclass
+class ProjectPaths:
+    """Standard dataset and output directory layout."""
+
+    project_root: Path = field(default_factory=lambda: PROJECT_ROOT)
+    datasets_dir: str = "datasets"
+    outputs_dir: str = "outputs"
+
+    def dataset_folder(self, dataset_name: str) -> Path:
+        return self.project_root / self.datasets_dir / dataset_name
+
+    def output_folder(self, dataset_name: str) -> Path:
+        return self.project_root / self.outputs_dir / dataset_name
+
+    def calibration_folder(self) -> Path:
+        return self.project_root / self.outputs_dir / "calibration"
+
+    def pair_csv(self, dataset_name: str) -> Path:
+        return self.output_folder(dataset_name) / "back_pair_results.csv"
+
+    def pattern_summary_json(self, dataset_name: str) -> Path:
+        return self.output_folder(dataset_name) / "back_pattern_decode_summary.json"
+
+    def filtered_distance_csv(self, dataset_name: str) -> Path:
+        return self.output_folder(dataset_name) / "back_pair_distance_filtered.csv"
+
+    def distance_model_json(self) -> Path:
+        return self.calibration_folder() / "distance_model_summary.json"
+
+    def observation_packet_json(
+        self, dataset_name: str, frame: int | None = None
+    ) -> Path:
+        folder = self.output_folder(dataset_name)
+        if frame is None:
+            return folder / "observation_packet_sample.json"
+        return folder / f"observation_packet_frame_{frame}.json"
+
+
+@dataclass
+class VisionConfig:
+    """LED detection, tracking, and spatio-temporal matching parameters."""
+
+    fps: int = 60
+    bit_duration_seconds: float = 0.1
+
+    face_patterns: dict[str, str] = field(default_factory=lambda: dict(FACE_PATTERNS))
+
+    lower_hsv: tuple[int, int, int] = (54, 83, 172)
+    upper_hsv: tuple[int, int, int] = (95, 147, 226)
+
+    min_area: float = 20.0
+    max_area: float = 6000.0
+    min_aspect_ratio: float = 0.25
+    max_aspect_ratio: float = 4.50
+    on_area_threshold: float = 35.0
+
+    camera_vertical_fov_deg: float = 60.0
+    display_scale: float = 0.5
+
+    min_pattern_accuracy: float = 0.95
+    min_pixel_distance: float = 20.0
+
+    # Matcher mode: spatio_temporal (default) or legacy_largest2
+    matcher_mode: str = "spatio_temporal"
+
+    # Centroid tracker
+    max_match_distance_px: float = 80.0
+    max_missed_frames: int = 18
+    centroid_ema_alpha: float = 0.6
+    min_track_age_frames: int = 6
+
+    # Per-track temporal buffers
+    signal_buffer_maxlen: int = 60
+    geometry_history_maxlen: int = 30
+    min_pair_frames: int = 18
+    min_decode_frames: int = 48
+
+    # Correlation and face decode
+    min_pair_correlation: float = 0.90
+    min_pair_score: float = 0.80
+
+    # Geometry sanity
+    geometry_window_frames: int = 15
+    max_pixel_distance_cv: float = 0.08
+    min_pixel_distance_px: float = 35.0
+    max_pixel_distance_px: float = 260.0
+    max_y_alignment_ratio: float = 0.5
+    min_area_similarity: float = 0.4
+    max_midpoint_jump_px: float = 25.0
+
+    # Legacy largest2 (Phase 1 parity)
+    require_exactly_two_candidates: bool = False
+    pair_strategy: str = "largest2"
+
+    @property
+    def frames_per_bit(self) -> int:
+        return int(self.fps * self.bit_duration_seconds)
+
+    @property
+    def lower_hsv_array(self) -> np.ndarray:
+        return np.array(self.lower_hsv, dtype=np.uint8)
+
+    @property
+    def upper_hsv_array(self) -> np.ndarray:
+        return np.array(self.upper_hsv, dtype=np.uint8)
+
+    def match_distance_for_image(self, image_width: int, image_height: int) -> float:
+        diagonal = (image_width ** 2 + image_height ** 2) ** 0.5
+        return max(self.max_match_distance_px, 0.03 * diagonal)
+
+
+# Backward-compatible alias used by Phase 1 imports.
+BackFaceConfig = VisionConfig
+
+
+DEFAULT_CALIBRATION_POINTS: list[dict] = [
+    {
+        "test_name": "BackOnly_Test_01",
+        "distance_unit": 1.47,
+        "median_px": 168.0,
+        "pattern_accuracy": 1.00,
+        "filtered_std": 0.61,
+        "notes": "Initial static reference",
+    },
+    {
+        "test_name": "BackOnly_Test_02",
+        "distance_unit": 2.00,
+        "median_px": 118.0,
+        "pattern_accuracy": 1.00,
+        "filtered_std": 0.002,
+        "notes": "Camera moved backward; Y/Z changed slightly",
+    },
+    {
+        "test_name": "BackOnly_Test_03",
+        "distance_unit": 2.50,
+        "median_px": 92.00543462209176,
+        "pattern_accuracy": 1.00,
+        "filtered_std": 0.74,
+        "notes": "Camera moved backward; Y/Z changed slightly",
+    },
+    {
+        "test_name": "BackOnly_Test_04",
+        "distance_unit": 3.00,
+        "median_px": 73.06161783043132,
+        "pattern_accuracy": 1.00,
+        "filtered_std": 0.82,
+        "notes": "Camera moved only along X axis; Y/Z fixed",
+    },
+    {
+        "test_name": "BackOnly_Test_05",
+        "distance_unit": 4.00,
+        "median_px": 53.0,
+        "pattern_accuracy": 1.00,
+        "filtered_std": 0.67,
+        "notes": "Camera moved only along X axis; Y/Z fixed",
+    },
+    {
+        "test_name": "BackOnly_Test_06",
+        "distance_unit": 5.00,
+        "median_px": 37.0,
+        "pattern_accuracy": 0.99,
+        "filtered_std": 2.24,
+        "notes": "Far-range boundary test",
+    },
+]
