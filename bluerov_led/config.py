@@ -115,6 +115,15 @@ class VisionConfig:
     require_exactly_two_candidates: bool = False
     pair_strategy: str = "largest2"
 
+    # Online Stream / Kalman Filter Configurations
+    kf_process_noise_pos: float = 10.0
+    kf_process_noise_vel: float = 10.0
+    kf_measurement_noise_pos: float = 0.1
+    rolling_iqr_window: int = 30
+    outlier_distance_rejection_iqr_multiplier: float = 1.5
+    signal_1d_lpf_alpha: float = 0.3
+    max_hold_frames: int = 15
+
     @property
     def frames_per_bit(self) -> int:
         return int(self.fps * self.bit_duration_seconds)

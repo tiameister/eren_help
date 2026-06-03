@@ -85,8 +85,9 @@ class SpatioTemporalMatcher:
         candidates: list[LedCandidate],
         image_width: int,
         image_height: int,
+        dt: float | None = None
     ) -> list[TrackedBlob]:
-        tracks = self.tracker.update(candidates, image_width, image_height)
+        tracks = self.tracker.update(candidates, image_width, image_height, dt)
 
         for track in tracks:
             if track.candidate is not None:

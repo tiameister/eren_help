@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from bluerov_led.config import VisionConfig
 from bluerov_led.types import LedCandidate
+from bluerov_led.filtering import KalmanFilter2D
 
 
 @dataclass
@@ -18,6 +19,7 @@ class TrackedBlob:
     missed_frames: int = 0
     age_frames: int = 1
     candidate: LedCandidate | None = None
+    kf: KalmanFilter2D | None = None
 
 
 class CentroidTracker:
@@ -46,9 +48,19 @@ class CentroidTracker:
         candidates: list[LedCandidate],
         image_width: int,
         image_height: int,
+        dt: float | None = None
     ) -> list[TrackedBlob]:
         max_dist = self._ensure_match_distance(image_width, image_height)
-        alpha = self.config.centroid_ema_alpha
+        
+        # Use dynamic dt or fallback to static framerate based dt
+        dt = dt if dt is not None else (1.0 / self.config.fps)
+
+        # Predict step for all active tracks
+        for track in self._tracks.values():
+            if track.kf is not None:
+                p_cx, p_cy = track.kf.predict(dt)
+                track.cx = p_cx
+                track.cy = p_cy
 
         if not self._tracks:
             for cand in candidates:
@@ -65,6 +77,7 @@ class CentroidTracker:
             track = self._tracks[tid]
             for d_idx in unmatched_detections:
                 cand = candidates[d_idx]
+                # Distance to the predicted state rather than previous observation
                 dist = math.hypot(cand.cx - track.cx, cand.cy - track.cy)
                 if dist <= max_dist:
                     pairs.append((dist, t_idx, d_idx))
@@ -82,8 +95,15 @@ class CentroidTracker:
             cand = candidates[d_idx]
             track = self._tracks[tid]
 
-            track.cx = alpha * cand.cx + (1.0 - alpha) * track.cx
-            track.cy = alpha * cand.cy + (1.0 - alpha) * track.cy
+            # Update step with Kalman filter observation
+            if track.kf is not None:
+                u_cx, u_cy = track.kf.update(cand.cx, cand.cy)
+                track.cx = u_cx
+                track.cy = u_cy
+            else:
+                track.cx = float(cand.cx)
+                track.cy = float(cand.cy)
+
             track.area = cand.area
             track.candidate = cand
             track.missed_frames = 0
@@ -114,12 +134,21 @@ class CentroidTracker:
         return list(self._tracks.values())
 
     def _spawn_track(self, candidate: LedCandidate) -> TrackedBlob:
+        kf = KalmanFilter2D(
+            init_x=float(candidate.cx),
+            init_y=float(candidate.cy),
+            process_noise_pos=self.config.kf_process_noise_pos,
+            process_noise_vel=self.config.kf_process_noise_vel,
+            measurement_noise=self.config.kf_measurement_noise_pos
+        )
+
         track = TrackedBlob(
             track_id=self._next_id,
             cx=float(candidate.cx),
             cy=float(candidate.cy),
             area=candidate.area,
             candidate=candidate,
+            kf=kf,
         )
         self._tracks[self._next_id] = track
         self._next_id += 1
