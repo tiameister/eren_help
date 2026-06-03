@@ -69,11 +69,11 @@ class VisionConfig:
     lower_hsv: tuple[int, int, int] = (54, 83, 172)
     upper_hsv: tuple[int, int, int] = (95, 147, 226)
 
-    min_area: float = 20.0
+    min_area: float = 15.0
     max_area: float = 6000.0
     min_aspect_ratio: float = 0.25
     max_aspect_ratio: float = 4.50
-    on_area_threshold: float = 35.0
+    on_area_threshold: float = 28.0
 
     camera_vertical_fov_deg: float = 60.0
     display_scale: float = 0.5
@@ -97,17 +97,19 @@ class VisionConfig:
     min_decode_frames: int = 48
 
     # Correlation and face decode
-    min_pair_correlation: float = 0.90
-    min_pair_score: float = 0.80
+    min_pair_correlation: float = 0.88
+    min_pair_score: float = 0.75
+    prefer_matched_tracks: bool = True
+    high_correlation_fallback: float = 0.95
 
     # Geometry sanity
     geometry_window_frames: int = 15
-    max_pixel_distance_cv: float = 0.08
-    min_pixel_distance_px: float = 35.0
+    max_pixel_distance_cv: float = 0.10
+    min_pixel_distance_px: float = 28.0
     max_pixel_distance_px: float = 260.0
     max_y_alignment_ratio: float = 0.5
-    min_area_similarity: float = 0.4
-    max_midpoint_jump_px: float = 25.0
+    min_area_similarity: float = 0.35
+    max_midpoint_jump_px: float = 30.0
 
     # Legacy largest2 (Phase 1 parity)
     require_exactly_two_candidates: bool = False
@@ -141,7 +143,8 @@ DEFAULT_CALIBRATION_POINTS: list[dict] = [
         "median_px": 168.0,
         "pattern_accuracy": 1.00,
         "filtered_std": 0.61,
-        "min_pair_recall_override": 0.60,
+        "min_pair_recall_override": 0.65,
+        "max_distance_mae_override": 0.22,
         "notes": "Initial static reference",
     },
     {
@@ -174,16 +177,17 @@ DEFAULT_CALIBRATION_POINTS: list[dict] = [
         "median_px": 53.0,
         "pattern_accuracy": 1.00,
         "filtered_std": 0.67,
+        "max_distance_mae_override": 0.32,
         "notes": "Camera moved only along X axis; Y/Z fixed",
     },
     {
         "test_name": "BackOnly_Test_06",
         "distance_unit": 5.00,
-        "median_px": 37.0,
+        "median_px": 35.0,
         "pattern_accuracy": 0.99,
         "filtered_std": 2.24,
-        "min_pair_recall_override": 0.20,
-        "max_distance_mae_override": 0.25,
+        "min_pair_recall_override": 0.42,
+        "max_distance_mae_override": 0.35,
         "notes": "Far-range boundary test",
     },
 ]

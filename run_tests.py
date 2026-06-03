@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip extract if outputs/<dataset>/back_pair_results.csv exists.",
     )
     parser.add_argument(
+        "--force-reextract",
+        action="store_true",
+        help="Always re-run extract before validating (Phase 4 tuning).",
+    )
+    parser.add_argument(
         "--matcher",
         choices=["spatio_temporal", "legacy_largest2"],
         default="spatio_temporal",
@@ -132,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         results = runner.run_all(
             datasets=args.datasets,
             use_cache=args.use_cache,
+            force_reextract=args.force_reextract,
         )
     except FileNotFoundError as exc:
         print("ERROR:", exc)

@@ -25,12 +25,22 @@ class FacePatternDecoder:
         self.config = config
         self._decoder = TemporalDecoder(config)
 
-    def decode_signal(self, frame_bits: list[int]) -> FaceDecodeResult | None:
-        if len(frame_bits) < self.config.min_decode_frames:
+    def decode_signal(
+        self,
+        frame_bits: list[int],
+        min_decoded_bits: int = 8,
+        min_signal_frames: int | None = None,
+    ) -> FaceDecodeResult | None:
+        min_frames = (
+            min_signal_frames
+            if min_signal_frames is not None
+            else self.config.min_decode_frames
+        )
+        if len(frame_bits) < min_frames:
             return None
 
         decoded_bits = self._decoder.decode_frame_bits(frame_bits)
-        if len(decoded_bits) < 8:
+        if len(decoded_bits) < min_decoded_bits:
             return None
 
         decoded_string = "".join(str(b) for b in decoded_bits)

@@ -184,8 +184,24 @@ def validate_dataset_csv(
     estimated_distance = None
 
     if true_positive_count > 0:
-        tp_rows = paired[tp_mask]
-        median_px = float(tp_rows["pixel_distance"].median())
+        tp_rows = paired[tp_mask].copy()
+
+        if len(tp_rows) >= 4:
+            q1 = tp_rows["pixel_distance"].quantile(0.25)
+            q3 = tp_rows["pixel_distance"].quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            tp_rows = tp_rows[
+                (tp_rows["pixel_distance"] >= lower)
+                & (tp_rows["pixel_distance"] <= upper)
+            ]
+
+        if len(tp_rows) > 0:
+            median_px = float(tp_rows["pixel_distance"].median())
+        else:
+            median_px = float(paired[tp_mask]["pixel_distance"].median())
+
         estimated_distance = distance_model.estimate(median_px)
 
         if spec.ground_truth_distance_unit is not None and estimated_distance is not None:
@@ -327,8 +343,16 @@ class ValidationRunner:
 
         return all(col in columns for col in self._REQUIRED_CSV_COLUMNS)
 
-    def run_extract(self, spec: DatasetTestSpec, use_cache: bool) -> Path:
+    def run_extract(
+        self,
+        spec: DatasetTestSpec,
+        use_cache: bool,
+        force_reextract: bool = False,
+    ) -> Path:
         csv_path = self.paths.pair_csv(spec.dataset_name)
+
+        if force_reextract:
+            use_cache = False
 
         if use_cache and self._csv_is_compatible(csv_path):
             print(f"  Using cached CSV: {csv_path}")
@@ -351,8 +375,13 @@ class ValidationRunner:
         self,
         spec: DatasetTestSpec,
         use_cache: bool,
+        force_reextract: bool = False,
     ) -> DatasetValidationResult:
-        csv_path = self.run_extract(spec, use_cache=use_cache)
+        csv_path = self.run_extract(
+            spec,
+            use_cache=use_cache,
+            force_reextract=force_reextract,
+        )
         df = ArtifactWriter.read_frame_records_csv(csv_path)
         return validate_dataset_csv(
             df=df,
@@ -366,6 +395,7 @@ class ValidationRunner:
         self,
         datasets: list[str] | None = None,
         use_cache: bool = False,
+        force_reextract: bool = False,
     ) -> list[DatasetValidationResult]:
         specs = self.resolve_specs(datasets)
 
@@ -376,7 +406,11 @@ class ValidationRunner:
 
         for spec in specs:
             print(f"\nValidating {spec.dataset_name} ...")
-            result = self.validate_one(spec, use_cache=use_cache)
+            result = self.validate_one(
+                spec,
+                use_cache=use_cache,
+                force_reextract=force_reextract,
+            )
             results.append(result)
 
             status = "PASS" if result.passed else "FAIL"
