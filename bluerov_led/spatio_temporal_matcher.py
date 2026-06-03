@@ -8,7 +8,7 @@ from itertools import combinations
 
 from bluerov_led.centroid_tracker import CentroidTracker, TrackedBlob
 from bluerov_led.config import VisionConfig
-from bluerov_led.face_decoder import FacePatternDecoder
+from bluerov_led.face_decoder import FaceDecodeResult, FacePatternDecoder
 from bluerov_led.signal_buffer import TrackSignalBuffer, TrackSample
 from bluerov_led.types import LedCandidate
 
@@ -66,10 +66,14 @@ class SpatioTemporalMatcher:
         self.tracker = CentroidTracker(config)
         self.buffers = TrackSignalBuffer(config)
         self.face_decoder = FacePatternDecoder(config)
+        self._last_candidate_count = 0
+        self._last_face_decode: FaceDecodeResult | None = None
 
     def reset(self) -> None:
         self.tracker.reset()
         self.buffers.reset()
+        self._last_candidate_count = 0
+        self._last_face_decode = None
 
     def _per_track_on(self, area: float) -> int:
         return 1 if area >= self.config.on_area_threshold else 0

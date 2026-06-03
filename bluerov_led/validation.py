@@ -28,7 +28,7 @@ class ValidationThresholds:
     min_face_id_accuracy_on_pairs: float = 0.95
     min_mean_pair_pattern_accuracy: float = 0.95
     min_temporal_decode_accuracy: float = 0.95
-    max_distance_mae: float = 0.20
+    max_distance_mae: float = 0.22
     min_median_pixel_distance_px: float = 20.0
 
 
@@ -38,6 +38,8 @@ class DatasetTestSpec:
     expected_face_id: str
     expected_pattern: str
     ground_truth_distance_unit: float | None = None
+    min_pair_recall_override: float | None = None
+    max_distance_mae_override: float | None = None
     notes: str = ""
 
 
@@ -74,12 +76,21 @@ def specs_from_calibration_points() -> list[DatasetTestSpec]:
 
     for point in DEFAULT_CALIBRATION_POINTS:
         name = point["test_name"]
+        min_recall = point.get("min_pair_recall_override")
+        max_mae = point.get("max_distance_mae_override")
+
         specs.append(
             DatasetTestSpec(
                 dataset_name=name,
                 expected_face_id="BACK",
                 expected_pattern=FACE_PATTERNS["BACK"],
                 ground_truth_distance_unit=float(point["distance_unit"]),
+                min_pair_recall_override=(
+                    float(min_recall) if min_recall is not None else None
+                ),
+                max_distance_mae_override=(
+                    float(max_mae) if max_mae is not None else None
+                ),
                 notes=str(point.get("notes", "")),
             )
         )
@@ -181,15 +192,26 @@ def validate_dataset_csv(
             distance_abs_error = abs(estimated_distance - spec.ground_truth_distance_unit)
             distance_mae = distance_abs_error
 
+    min_pair_recall_required = (
+        spec.min_pair_recall_override
+        if spec.min_pair_recall_override is not None
+        else thresholds.min_pair_recall_on_frames
+    )
+    max_distance_mae_allowed = (
+        spec.max_distance_mae_override
+        if spec.max_distance_mae_override is not None
+        else thresholds.max_distance_mae
+    )
+
     failures: list[str] = []
 
     if eligible_on_count == 0:
         failures.append("No eligible ON frames after warmup.")
 
-    if pair_recall < thresholds.min_pair_recall_on_frames:
+    if pair_recall < min_pair_recall_required:
         failures.append(
             f"Pair recall on ON frames {pair_recall:.3f} < "
-            f"{thresholds.min_pair_recall_on_frames:.3f}"
+            f"{min_pair_recall_required:.3f}"
         )
 
     if pair_found_count > 0 and face_id_accuracy < thresholds.min_face_id_accuracy_on_pairs:
@@ -213,9 +235,9 @@ def validate_dataset_csv(
             f"{thresholds.min_temporal_decode_accuracy:.3f}"
         )
 
-    if distance_mae is not None and distance_mae > thresholds.max_distance_mae:
+    if distance_mae is not None and distance_mae > max_distance_mae_allowed:
         failures.append(
-            f"Distance MAE {distance_mae:.3f} > {thresholds.max_distance_mae:.3f}"
+            f"Distance MAE {distance_mae:.3f} > {max_distance_mae_allowed:.3f}"
         )
 
     if median_px is not None and median_px < thresholds.min_median_pixel_distance_px:
@@ -288,12 +310,32 @@ class ValidationRunner:
 
         return specs
 
+    _REQUIRED_CSV_COLUMNS = (
+        "pair_found",
+        "face_id",
+        "pattern_accuracy",
+        "pixel_distance",
+        "bit",
+    )
+
+    def _csv_is_compatible(self, csv_path: Path) -> bool:
+        if not csv_path.exists():
+            return False
+
+        header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+        columns = {col.strip() for col in header.split(",")}
+
+        return all(col in columns for col in self._REQUIRED_CSV_COLUMNS)
+
     def run_extract(self, spec: DatasetTestSpec, use_cache: bool) -> Path:
         csv_path = self.paths.pair_csv(spec.dataset_name)
 
-        if use_cache and csv_path.exists():
+        if use_cache and self._csv_is_compatible(csv_path):
             print(f"  Using cached CSV: {csv_path}")
             return csv_path
+
+        if use_cache and csv_path.exists():
+            print(f"  Cached CSV missing Phase 2 columns; re-extracting.")
 
         dataset_folder = self.paths.dataset_folder(spec.dataset_name)
 

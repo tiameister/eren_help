@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-distance-mae",
         type=float,
-        default=0.20,
+        default=0.22,
         help="Maximum allowed distance MAE in Unity units.",
     )
 

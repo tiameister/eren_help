@@ -7,6 +7,7 @@ from bluerov_led.config import (
     VisionConfig,
 )
 from bluerov_led.pipeline import BackFacePipeline, PipelineResult
+from bluerov_led.validation import ValidationRunner, ValidationThresholds
 
 __all__ = [
     "FACE_PATTERNS",
@@ -15,4 +16,6 @@ __all__ = [
     "ProjectPaths",
     "BackFacePipeline",
     "PipelineResult",
+    "ValidationRunner",
+    "ValidationThresholds",
 ]

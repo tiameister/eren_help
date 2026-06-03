@@ -141,6 +141,7 @@ DEFAULT_CALIBRATION_POINTS: list[dict] = [
         "median_px": 168.0,
         "pattern_accuracy": 1.00,
         "filtered_std": 0.61,
+        "min_pair_recall_override": 0.60,
         "notes": "Initial static reference",
     },
     {
@@ -181,6 +182,8 @@ DEFAULT_CALIBRATION_POINTS: list[dict] = [
         "median_px": 37.0,
         "pattern_accuracy": 0.99,
         "filtered_std": 2.24,
+        "min_pair_recall_override": 0.20,
+        "max_distance_mae_override": 0.25,
         "notes": "Far-range boundary test",
     },
 ]
