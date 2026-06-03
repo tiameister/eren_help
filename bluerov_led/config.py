@@ -116,9 +116,9 @@ class VisionConfig:
     pair_strategy: str = "largest2"
 
     # Online Stream / Kalman Filter Configurations
-    kf_process_noise_pos: float = 10.0
-    kf_process_noise_vel: float = 10.0
-    kf_measurement_noise_pos: float = 0.1
+    kf_process_noise_pos: float = 0.5
+    kf_process_noise_vel: float = 0.05
+    kf_measurement_noise_pos: float = 0.5
     rolling_iqr_window: int = 30
     outlier_distance_rejection_iqr_multiplier: float = 1.5
     signal_1d_lpf_alpha: float = 0.3
