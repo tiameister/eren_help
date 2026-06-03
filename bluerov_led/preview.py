@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import cv2
 
-from bluerov_led.config import BackFaceConfig
+from bluerov_led.config import VisionConfig
 from bluerov_led.dataset_io import DatasetReader
 
 
 def preview_dataset(
     dataset_folder,
-    config: BackFaceConfig | None = None,
+    config: VisionConfig | None = None,
     display_scale: float = 0.5,
 ) -> None:
     if config is None:
-        config = BackFaceConfig()
+        config = VisionConfig()
 
     reader = DatasetReader(dataset_folder)
     frame_paths = reader.list_frame_paths()

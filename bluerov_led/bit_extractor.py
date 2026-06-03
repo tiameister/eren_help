@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from bluerov_led.config import BackFaceConfig
+from bluerov_led.config import VisionConfig
 from bluerov_led.types import LedCandidate
 
 
 class BitExtractor:
     """Derive a single blink bit per frame from aggregate LED area."""
 
-    def __init__(self, config: BackFaceConfig) -> None:
+    def __init__(self, config: VisionConfig) -> None:
         self.config = config
 
     def bit_from_candidates(self, candidates: list[LedCandidate]) -> int:

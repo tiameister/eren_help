@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 
@@ -15,9 +15,6 @@ class LedCandidate:
     cx: int
     cy: int
     area: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass
@@ -118,19 +115,6 @@ class PatternSummary:
             best_global_shift=data.get("best_global_shift"),
             error_positions=data.get("error_positions", []),
         )
-
-
-@dataclass
-class CalibrationPoint:
-    test_name: str
-    distance_unit: float
-    median_px: float
-    pattern_accuracy: float
-    filtered_std: float
-    notes: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass

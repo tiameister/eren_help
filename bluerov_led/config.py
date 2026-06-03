@@ -132,10 +132,6 @@ class VisionConfig:
         return max(self.max_match_distance_px, 0.03 * diagonal)
 
 
-# Backward-compatible alias used by Phase 1 imports.
-BackFaceConfig = VisionConfig
-
-
 DEFAULT_CALIBRATION_POINTS: list[dict] = [
     {
         "test_name": "BackOnly_Test_01",

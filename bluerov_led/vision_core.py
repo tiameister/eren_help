@@ -5,14 +5,14 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from bluerov_led.config import BackFaceConfig
+from bluerov_led.config import VisionConfig
 from bluerov_led.types import LedCandidate
 
 
 class LedCandidateExtractor:
     """Extract LED blob candidates from a BGR frame."""
 
-    def __init__(self, config: BackFaceConfig) -> None:
+    def __init__(self, config: VisionConfig) -> None:
         self.config = config
 
     def extract_from_hsv(

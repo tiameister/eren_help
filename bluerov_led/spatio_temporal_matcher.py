@@ -9,7 +9,7 @@ from itertools import combinations
 from bluerov_led.centroid_tracker import CentroidTracker, TrackedBlob
 from bluerov_led.config import VisionConfig
 from bluerov_led.face_decoder import FaceDecodeResult, FacePatternDecoder
-from bluerov_led.signal_buffer import TrackSignalBuffer, TrackSample
+from bluerov_led.signal_buffer import TrackSignalBuffer
 from bluerov_led.types import LedCandidate
 
 

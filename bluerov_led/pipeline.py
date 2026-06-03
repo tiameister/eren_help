@@ -594,8 +594,8 @@ class BackFacePipeline:
         pair_csv = self.extract(dataset, preview=preview)
         self.decode_pattern(dataset)
         filtered_csv = self.filter_distances(dataset)
-        model = self.calibrate()
-        packet, packet_json = self.build_packet(dataset)
+        self.calibrate()
+        _, packet_json = self.build_packet(dataset)
 
         return PipelineResult(
             dataset=dataset,

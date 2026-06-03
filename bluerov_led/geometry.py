@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import math
 
-from bluerov_led.config import BackFaceConfig
+from bluerov_led.config import VisionConfig
 from bluerov_led.types import LedCandidate, PairGeometry
 
 
 class GeometryCalculator:
     """Compute pair geometry and camera-frame ray toward midpoint."""
 
-    def __init__(self, config: BackFaceConfig) -> None:
+    def __init__(self, config: VisionConfig) -> None:
         self.config = config
 
     def compute_pair_geometry(

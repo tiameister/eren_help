@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from bluerov_led.config import VisionConfig
 from bluerov_led.types import LedCandidate

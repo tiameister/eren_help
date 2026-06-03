@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 
 from bluerov_led.config import DEFAULT_CALIBRATION_POINTS
-from bluerov_led.types import CalibrationPoint
 
 
 @dataclass
@@ -65,15 +64,9 @@ class DistanceModel:
     @classmethod
     def fit(
         cls,
-        points: list[CalibrationPoint] | list[dict] | None = None,
+        points: list[dict] | None = None,
     ) -> DistanceModel:
-        if points is None:
-            raw = DEFAULT_CALIBRATION_POINTS
-        else:
-            raw = [
-                p.to_dict() if isinstance(p, CalibrationPoint) else p
-                for p in points
-            ]
+        raw = DEFAULT_CALIBRATION_POINTS if points is None else points
 
         px = np.array([p["median_px"] for p in raw], dtype=float)
         distance = np.array([p["distance_unit"] for p in raw], dtype=float)

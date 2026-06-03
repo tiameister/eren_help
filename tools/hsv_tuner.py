@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from bluerov_led.config import BackFaceConfig
+from bluerov_led.config import ProjectPaths
 from bluerov_led.dataset_io import DatasetReader
 
 
@@ -64,8 +64,5 @@ def run_hsv_tuner(
 
 
 if __name__ == "__main__":
-    config = BackFaceConfig()
-    from bluerov_led.config import ProjectPaths
-
     paths = ProjectPaths()
     run_hsv_tuner(paths.dataset_folder("BackOnly_Test_02"))

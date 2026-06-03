@@ -14,7 +14,7 @@ from bluerov_led.config import (
     ProjectPaths,
     VisionConfig,
 )
-from bluerov_led.dataset_io import ArtifactWriter, DatasetReader
+from bluerov_led.dataset_io import ArtifactWriter
 from bluerov_led.distance_model import DistanceModel
 from bluerov_led.pipeline import BackFacePipeline
 from bluerov_led.temporal_decoder import TemporalDecoder
