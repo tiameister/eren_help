@@ -123,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output .mp4 path (default: outputs/<stem>_annotated.mp4).",
     )
+    p_video.add_argument(
+        "--bypass-decode",
+        action="store_true",
+        help="CONSTANT_ON test mode: skip blink decode, use spatial pairing only.",
+    )
 
     return parser
 
@@ -254,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_path,
                 project_root=root,
                 outputs_dir=args.outputs_dir,
+                bypass_decode=getattr(args, "bypass_decode", False),
             )
             print("Annotated video:", out)
         except (FileNotFoundError, RuntimeError) as exc:

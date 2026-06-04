@@ -84,6 +84,10 @@ class VisionConfig:
     # Mission target for lock-on and confidence-weighted IQR
     target_face_id: str = "BACK"
 
+    # CONSTANT_ON test mode (MP4 only): spatial pairing without blink decode
+    bypass_temporal_decode: bool = False
+    constant_on_min_geometry_score: float = 0.85
+
     # Matcher mode: spatio_temporal (default) or legacy_largest2
     matcher_mode: str = "spatio_temporal"
 

@@ -64,6 +64,7 @@ def annotate_frame(
     lock_active: bool,
     target_face_id: str,
     candidates: list[LedCandidate] | None = None,
+    bypass_decode: bool = False,
 ) -> np.ndarray:
     """Draw LED boxes, midpoint crosshair, and telemetry HUD."""
     output = frame.copy()
@@ -133,12 +134,32 @@ def annotate_frame(
         cv2.circle(output, (mx, my), 5, (255, 255, 255), -1)
 
     hud_ok = is_valid or (is_held and has_geometry)
+    constant_on_tracking = (
+        bypass_decode
+        and has_geometry
+        and (is_valid or is_held or record.pair_found == 1)
+    )
+    if constant_on_tracking:
+        hud_ok = True
+
     hud_color = (80, 255, 160) if hud_ok else (80, 80, 255)
+    if constant_on_tracking:
+        hud_color = (80, 255, 160)
     if not hud_ok and not lock_active:
         hud_color = (60, 60, 255)
 
     face_id = packet.get("face_id") or record.face_id or "—"
-    if is_valid or is_held:
+    if constant_on_tracking and (is_valid or is_held):
+        distance = _float_or_zero(packet.get("estimated_distance"))
+        yaw_err = _float_or_zero(packet.get("error_x"))
+        heave_err = _float_or_zero(packet.get("error_y"))
+        lines = [
+            "TRACKING (CONSTANT_ON TEST)",
+            f"Distance: {distance:.3f}",
+            f"Yaw Error: {yaw_err:.4f}",
+            f"Heave Error: {heave_err:.4f}",
+        ]
+    elif is_valid or is_held:
         distance = _float_or_zero(packet.get("estimated_distance"))
         yaw_err = _float_or_zero(packet.get("error_x"))
         lock_line = "LOCKED" if lock_active else ("HELD" if is_held else "TRACKING")
@@ -178,9 +199,12 @@ def annotate_frame(
         )
 
     status = "VALID" if is_valid else ("HELD" if is_held else "LOST")
+    footer = f"F:{record.frame}  {status}  Cands:{record.candidate_count}"
+    if bypass_decode:
+        footer += "  CONSTANT_ON"
     cv2.putText(
         output,
-        f"F:{record.frame}  {status}  Cands:{record.candidate_count}",
+        footer,
         (12, h - 16),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
@@ -206,6 +230,7 @@ def process_video(
     project_root: Path | None = None,
     outputs_dir: str = "outputs",
     no_udp: bool = True,
+    bypass_decode: bool = False,
 ) -> Path:
     """
     Read MP4 frames, run StreamingPipeline.process_frame, write annotated MP4.
@@ -226,7 +251,10 @@ def process_video(
     )
     out_path = out_path.resolve()
 
-    config = VisionConfig(matcher_mode="spatio_temporal")
+    config = VisionConfig(
+        matcher_mode="spatio_temporal",
+        bypass_temporal_decode=bypass_decode,
+    )
     model_path = paths.distance_model_json()
     model_data = ArtifactWriter.read_json(model_path)
     distance_model_dict = (
@@ -276,6 +304,11 @@ def process_video(
     print(f"Input: {input_video}", flush=True)
     print(f"Output: {out_path}", flush=True)
     print(f"Resolution: {width}x{height} @ {fps:.2f} fps", flush=True)
+    if bypass_decode:
+        print(
+            "Mode: CONSTANT_ON test (bypass temporal decode)",
+            flush=True,
+        )
 
     try:
         while True:
@@ -312,6 +345,7 @@ def process_video(
                 lock_active=lock_active,
                 target_face_id=config.target_face_id,
                 candidates=candidates,
+                bypass_decode=bypass_decode,
             )
             writer.write(annotated)
             frame_index += 1
@@ -354,6 +388,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output .mp4 path (default: outputs/<stem>_annotated.mp4)",
     )
     parser.add_argument("--outputs-dir", default="outputs")
+    parser.add_argument(
+        "--bypass-decode",
+        action="store_true",
+        help="CONSTANT_ON test mode: skip blink decode, use spatial pairing only.",
+    )
     return parser
 
 
@@ -366,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
             input_path,
             output_path,
             outputs_dir=args.outputs_dir,
+            bypass_decode=args.bypass_decode,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -610,6 +610,11 @@ class PipelineDashboard(QMainWindow):
         video_path_row.addWidget(self.mp4_browse_btn)
         video_group_layout.addLayout(video_path_row)
 
+        self.constant_on_bypass_cb = QCheckBox(
+            "Constant ON Test Mode (Bypass Blink Decode)"
+        )
+        video_group_layout.addWidget(self.constant_on_bypass_cb)
+
         self.video_process_btn = QPushButton("Start Video Processing")
         self.video_process_btn.setObjectName("primaryValidation")
         self.video_process_btn.clicked.connect(self._run_video_processing)
@@ -936,6 +941,12 @@ class PipelineDashboard(QMainWindow):
             "--video",
             video_path,
         ]
+        if self.constant_on_bypass_cb.isChecked():
+            args.append("--bypass-decode")
+            self._processes["video"].append_line(
+                "Video mode: CONSTANT_ON (bypass decode)"
+            )
+
         self._processes["video"].start(args)
 
     def _run_validation(self) -> None:

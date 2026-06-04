@@ -12,7 +12,7 @@ from bluerov_led.adaptive_geometry import (
     passes_distance_gate,
 )
 from bluerov_led.centroid_tracker import CentroidTracker, TrackedBlob
-from bluerov_led.config import VisionConfig
+from bluerov_led.config import FACE_PATTERNS, VisionConfig
 from bluerov_led.face_decoder import FaceDecodeResult, FacePatternDecoder
 from bluerov_led.signal_buffer import TrackSignalBuffer
 from bluerov_led.types import LedCandidate
@@ -301,11 +301,19 @@ class SpatioTemporalMatcher:
             and best.pair_correlation >= cfg.lock_min_pair_correlation
             and passes_distance_gate(dist, led1.area, led2.area, cfg)
         )
+        if cfg.bypass_temporal_decode:
+            qualifies = (
+                best.geometry_score >= cfg.constant_on_min_geometry_score
+                and best.pair_correlation >= cfg.lock_min_pair_correlation
+                and passes_distance_gate(dist, led1.area, led2.area, cfg)
+            )
 
-        wrong_face_strong = (
-            best.face_id != cfg.target_face_id
-            and best.pattern_accuracy > 0.9
-        )
+        wrong_face_strong = False
+        if not cfg.bypass_temporal_decode:
+            wrong_face_strong = (
+                best.face_id != cfg.target_face_id
+                and best.pattern_accuracy > 0.9
+            )
 
         if lock.active:
             key = tuple(sorted((best.track_id_1, best.track_id_2)))
@@ -333,11 +341,13 @@ class SpatioTemporalMatcher:
             lock.miss_streak = 0
 
     def _fallback_largest_two_pair(self) -> PairMatchResult | None:
-        if (
-            len(self._last_candidates) < 2
-            or self._last_face_decode is None
-            or not self._is_far_range_scene()
-        ):
+        if len(self._last_candidates) < 2:
+            return None
+
+        if self.config.bypass_temporal_decode:
+            return self._fallback_largest_two_constant_on()
+
+        if self._last_face_decode is None or not self._is_far_range_scene():
             return None
 
         led1, led2 = sorted(
@@ -492,6 +502,138 @@ class SpatioTemporalMatcher:
             track_id_2=id_b,
             active_track_count=self.tracker.active_track_count,
             fused_bit=fused_bit,
+        )
+
+    def _evaluate_constant_on_pair(
+        self,
+        track_a: TrackedBlob,
+        track_b: TrackedBlob,
+        relaxed_correlation: bool = False,
+    ) -> PairMatchResult | None:
+        """Spatial-only pairing for LEDs that stay ON (no blink decode)."""
+        id_a = track_a.track_id
+        id_b = track_b.track_id
+
+        signal_a = self.buffers.get_signal(id_a)
+        signal_b = self.buffers.get_signal(id_b)
+
+        correlation = signal_correlation(signal_a, signal_b)
+
+        min_correlation = self.config.min_pair_correlation
+        if relaxed_correlation:
+            min_correlation = min(0.82, min_correlation - 0.06)
+
+        if correlation < min_correlation:
+            return None
+
+        geometry_score, led1, led2 = self._geometry_score(id_a, id_b)
+
+        if led1 is None or led2 is None:
+            return None
+
+        if geometry_score < self.config.constant_on_min_geometry_score:
+            return None
+
+        pair_score = correlation
+        combined = pair_score * geometry_score
+        min_pair_score = self.config.min_pair_score
+        if relaxed_correlation:
+            min_pair_score *= 0.85
+
+        if combined < min_pair_score:
+            return None
+
+        target = self.config.target_face_id
+        pattern = FACE_PATTERNS.get(target, FACE_PATTERNS["BACK"])
+
+        return PairMatchResult(
+            face_id=target,
+            pattern=pattern,
+            pattern_accuracy=1.0,
+            bit_error_rate=0.0,
+            bit_error_count=0,
+            pair_correlation=correlation,
+            pair_score=pair_score,
+            geometry_score=geometry_score,
+            led1=led1,
+            led2=led2,
+            track_id_1=id_a,
+            track_id_2=id_b,
+            active_track_count=self.tracker.active_track_count,
+            fused_bit=1,
+        )
+
+    def _fallback_largest_two_constant_on(self) -> PairMatchResult | None:
+        led1, led2 = sorted(
+            self._last_candidates,
+            key=lambda c: c.area,
+            reverse=True,
+        )[:2]
+
+        dist = math.hypot(led1.cx - led2.cx, led1.cy - led2.cy)
+
+        if not passes_distance_gate(dist, led1.area, led2.area, self.config):
+            return None
+
+        d_max = dynamic_max_pixel_distance(led1.area, led2.area, self.config)
+        if dist > d_max:
+            return None
+
+        dy = abs(led1.cy - led2.cy)
+        if dy / max(dist, 1.0) > self.config.max_y_alignment_ratio:
+            return None
+
+        area_min = min(led1.area, led2.area)
+        area_max = max(led1.area, led2.area)
+        if area_max <= 0 or (area_min / area_max) < self.config.min_area_similarity:
+            return None
+
+        track_a = self._nearest_track(led1, self.tracker.list_tracks())
+        track_b = self._nearest_track(led2, self.tracker.list_tracks())
+
+        gate = distance_gate_score(dist, led1.area, led2.area, self.config)
+        if gate < self.config.constant_on_min_geometry_score:
+            return None
+
+        target = self.config.target_face_id
+        pattern = FACE_PATTERNS.get(target, FACE_PATTERNS["BACK"])
+
+        return PairMatchResult(
+            face_id=target,
+            pattern=pattern,
+            pattern_accuracy=1.0,
+            bit_error_rate=0.0,
+            bit_error_count=0,
+            pair_correlation=1.0,
+            pair_score=1.0,
+            geometry_score=gate,
+            led1=led1,
+            led2=led2,
+            track_id_1=track_a.track_id if track_a else -1,
+            track_id_2=track_b.track_id if track_b else -1,
+            active_track_count=self.tracker.active_track_count,
+            fused_bit=1,
+        )
+
+    def _evaluate_pair(
+        self,
+        track_a: TrackedBlob,
+        track_b: TrackedBlob,
+        *,
+        relaxed_decode: bool = False,
+        relaxed_correlation: bool = False,
+    ) -> PairMatchResult | None:
+        if self.config.bypass_temporal_decode:
+            return self._evaluate_constant_on_pair(
+                track_a,
+                track_b,
+                relaxed_correlation=relaxed_correlation,
+            )
+        return self._evaluate_track_pair(
+            track_a,
+            track_b,
+            relaxed_decode=relaxed_decode,
+            relaxed_correlation=relaxed_correlation,
         )
 
     def _geometry_checks(
@@ -656,7 +798,7 @@ class SpatioTemporalMatcher:
             locked = self._get_locked_tracks(eligible)
             if locked is not None:
                 track_a, track_b = locked
-                candidate = self._evaluate_track_pair(track_a, track_b)
+                candidate = self._evaluate_pair(track_a, track_b)
                 if candidate is not None:
                     self._update_lock_on(candidate)
                     return candidate
@@ -679,7 +821,7 @@ class SpatioTemporalMatcher:
                 continue
             seen_ids.add(key)
 
-            candidate = self._evaluate_track_pair(
+            candidate = self._evaluate_pair(
                 track_a,
                 track_b,
                 relaxed_decode=relaxed_decode,
