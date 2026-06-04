@@ -863,7 +863,16 @@ class StreamingPipeline:
             )
             raw_px_dist = geom.pixel_distance
 
-            if not self.rolling_iqr.is_outlier(raw_px_dist):
+            iqr_decision = self.rolling_iqr.evaluate(
+                raw_px_dist,
+                config=self.config,
+                pattern_accuracy=match.pattern_accuracy,
+                pair_correlation=match.pair_correlation,
+                geometry_score=match.geometry_score,
+                face_id=match.face_id,
+                pattern=match.pattern,
+            )
+            if iqr_decision.accept:
                 self.rolling_iqr.add_valid(raw_px_dist)
                 is_valid = True
 

@@ -81,6 +81,9 @@ class VisionConfig:
     min_pattern_accuracy: float = 0.95
     min_pixel_distance: float = 20.0
 
+    # Mission target for lock-on and confidence-weighted IQR
+    target_face_id: str = "BACK"
+
     # Matcher mode: spatio_temporal (default) or legacy_largest2
     matcher_mode: str = "spatio_temporal"
 
@@ -97,19 +100,45 @@ class VisionConfig:
     min_decode_frames: int = 48
 
     # Correlation and face decode
-    min_pair_correlation: float = 0.82
-    min_pair_score: float = 0.58
-    prefer_matched_tracks: bool = False
-    high_correlation_fallback: float = 0.88
+    min_pair_correlation: float = 0.83
+    min_pair_score: float = 0.60
+    prefer_matched_tracks: bool = True
+    high_correlation_fallback: float = 0.89
 
     # Geometry sanity
     geometry_window_frames: int = 15
-    max_pixel_distance_cv: float = 0.22
-    min_pixel_distance_px: float = 20.0
+    max_pixel_distance_cv: float = 0.20
+    min_pixel_distance_px: float = 48.0
     max_pixel_distance_px: float = 300.0
     max_y_alignment_ratio: float = 0.60
     min_area_similarity: float = 0.28
     max_midpoint_jump_px: float = 48.0
+
+    # Dynamic geometry (area-proportional distance gates)
+    dynamic_min_distance_k_r: float = 0.88
+    min_pixel_distance_far_px: float = 22.0
+    near_field_area_threshold: float = 500.0
+    dynamic_min_distance_soft_margin_px: float = 8.0
+    dynamic_max_distance_enabled: bool = False
+    dynamic_max_distance_d_ref: float = 168.0
+    dynamic_max_distance_r_ref: float = 60.0
+    dynamic_max_distance_alpha: float = 0.5
+
+    # Confidence-weighted IQR
+    iqr_confidence_max_multiplier: float = 10.0
+    iqr_confidence_t0: float = 0.55
+    iqr_confidence_t1: float = 0.85
+    iqr_bypass_confidence_threshold: float = 0.88
+    iqr_bypass_min_pattern_accuracy: float = 0.95
+    iqr_wrong_face_penalty: float = 0.5
+    iqr_require_target_pattern: bool = True
+
+    # Lock-on track pair state
+    lock_acquire_frames: int = 3
+    lock_release_miss_frames: int = 8
+    lock_score_boost: float = 2.0
+    lock_min_pattern_accuracy: float = 0.95
+    lock_min_pair_correlation: float = 0.85
 
     # Legacy largest2 (Phase 1 parity)
     require_exactly_two_candidates: bool = False

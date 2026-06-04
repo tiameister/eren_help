@@ -6,6 +6,11 @@ import math
 from dataclasses import dataclass
 from itertools import combinations
 
+from bluerov_led.adaptive_geometry import (
+    distance_gate_score,
+    dynamic_max_pixel_distance,
+    passes_distance_gate,
+)
 from bluerov_led.centroid_tracker import CentroidTracker, TrackedBlob
 from bluerov_led.config import VisionConfig
 from bluerov_led.face_decoder import FaceDecodeResult, FacePatternDecoder
@@ -29,6 +34,26 @@ class PairMatchResult:
     track_id_2: int
     active_track_count: int
     fused_bit: int
+
+
+@dataclass
+class LockOnState:
+    """Target-locked track pair fast path."""
+
+    active: bool = False
+    track_id_a: int | None = None
+    track_id_b: int | None = None
+    face_id: str | None = None
+    streak: int = 0
+    miss_streak: int = 0
+
+    def reset(self) -> None:
+        self.active = False
+        self.track_id_a = None
+        self.track_id_b = None
+        self.face_id = None
+        self.streak = 0
+        self.miss_streak = 0
 
 
 def signal_correlation(signal_a: list[int], signal_b: list[int]) -> float:
@@ -66,6 +91,7 @@ class SpatioTemporalMatcher:
         self.tracker = CentroidTracker(config)
         self.buffers = TrackSignalBuffer(config)
         self.face_decoder = FacePatternDecoder(config)
+        self.lock_on = LockOnState()
         self._last_candidate_count = 0
         self._last_candidates: list[LedCandidate] = []
         self._last_face_decode: FaceDecodeResult | None = None
@@ -73,6 +99,7 @@ class SpatioTemporalMatcher:
     def reset(self) -> None:
         self.tracker.reset()
         self.buffers.reset()
+        self.lock_on.reset()
         self._last_candidate_count = 0
         self._last_candidates = []
         self._last_face_decode = None
@@ -227,6 +254,84 @@ class SpatioTemporalMatcher:
 
         return list(combinations(eligible, 2))
 
+    def _get_locked_tracks(
+        self,
+        eligible: list[TrackedBlob],
+    ) -> tuple[TrackedBlob, TrackedBlob] | None:
+        if not self.lock_on.active:
+            return None
+
+        id_a = self.lock_on.track_id_a
+        id_b = self.lock_on.track_id_b
+        if id_a is None or id_b is None:
+            return None
+
+        by_id = {t.track_id: t for t in eligible}
+        track_a = by_id.get(id_a)
+        track_b = by_id.get(id_b)
+
+        if (
+            track_a is None
+            or track_b is None
+            or track_a.candidate is None
+            or track_b.candidate is None
+        ):
+            return None
+
+        return track_a, track_b
+
+    def _update_lock_on(self, best: PairMatchResult | None) -> None:
+        cfg = self.config
+        lock = self.lock_on
+
+        if best is None:
+            if lock.active:
+                lock.miss_streak += 1
+                if lock.miss_streak >= cfg.lock_release_miss_frames:
+                    lock.reset()
+            else:
+                lock.streak = 0
+            return
+
+        led1, led2 = best.led1, best.led2
+        dist = math.hypot(led1.cx - led2.cx, led1.cy - led2.cy)
+        qualifies = (
+            best.face_id == cfg.target_face_id
+            and best.pattern_accuracy >= cfg.lock_min_pattern_accuracy
+            and best.pair_correlation >= cfg.lock_min_pair_correlation
+            and passes_distance_gate(dist, led1.area, led2.area, cfg)
+        )
+
+        wrong_face_strong = (
+            best.face_id != cfg.target_face_id
+            and best.pattern_accuracy > 0.9
+        )
+
+        if lock.active:
+            key = tuple(sorted((best.track_id_1, best.track_id_2)))
+            locked_key = tuple(sorted((lock.track_id_a, lock.track_id_b)))
+            if key != locked_key or wrong_face_strong or not qualifies:
+                lock.miss_streak += 1
+                if lock.miss_streak >= cfg.lock_release_miss_frames:
+                    lock.reset()
+                return
+            lock.miss_streak = 0
+            lock.face_id = best.face_id
+            return
+
+        if wrong_face_strong or not qualifies:
+            lock.streak = 0
+            return
+
+        lock.streak += 1
+        if lock.streak >= cfg.lock_acquire_frames:
+            ids = sorted((best.track_id_1, best.track_id_2))
+            lock.active = True
+            lock.track_id_a = ids[0]
+            lock.track_id_b = ids[1]
+            lock.face_id = best.face_id
+            lock.miss_streak = 0
+
     def _fallback_largest_two_pair(self) -> PairMatchResult | None:
         if (
             len(self._last_candidates) < 2
@@ -242,11 +347,12 @@ class SpatioTemporalMatcher:
         )[:2]
 
         dist = math.hypot(led1.cx - led2.cx, led1.cy - led2.cy)
-        min_dist_px = self.config.min_pixel_distance_px
-        if max(led1.area, led2.area) < 100.0:
-            min_dist_px = min(min_dist_px, 22.0)
 
-        if dist < min_dist_px or dist > self.config.max_pixel_distance_px:
+        if not passes_distance_gate(dist, led1.area, led2.area, self.config):
+            return None
+
+        d_max = dynamic_max_pixel_distance(led1.area, led2.area, self.config)
+        if dist > d_max:
             return None
 
         dy = abs(led1.cy - led2.cy)
@@ -259,8 +365,13 @@ class SpatioTemporalMatcher:
             return None
 
         decode = self._last_face_decode
+        if decode.face_id != self.config.target_face_id:
+            return None
+
         track_a = self._nearest_track(led1, self.tracker.list_tracks())
         track_b = self._nearest_track(led2, self.tracker.list_tracks())
+
+        gate = distance_gate_score(dist, led1.area, led2.area, self.config)
 
         return PairMatchResult(
             face_id=decode.face_id,
@@ -270,7 +381,7 @@ class SpatioTemporalMatcher:
             bit_error_count=decode.bit_error_count,
             pair_correlation=1.0,
             pair_score=decode.global_accuracy,
-            geometry_score=1.0,
+            geometry_score=gate,
             led1=led1,
             led2=led2,
             track_id_1=track_a.track_id if track_a else -1,
@@ -346,6 +457,9 @@ class SpatioTemporalMatcher:
         if decode.global_accuracy < self.config.min_pattern_accuracy:
             return None
 
+        if decode.face_id != self.config.target_face_id:
+            return None
+
         geometry_score, led1, led2 = self._geometry_score(id_a, id_b)
 
         if led1 is None or led2 is None or geometry_score <= 0:
@@ -380,6 +494,30 @@ class SpatioTemporalMatcher:
             fused_bit=fused_bit,
         )
 
+    def _geometry_checks(
+        self,
+        dist: float,
+        a1: float,
+        a2: float,
+        dy: float,
+    ) -> bool:
+        if not passes_distance_gate(dist, a1, a2, self.config):
+            return False
+
+        d_max = dynamic_max_pixel_distance(a1, a2, self.config)
+        if dist > d_max:
+            return False
+
+        if dy / max(dist, 1.0) > self.config.max_y_alignment_ratio:
+            return False
+
+        area_max = max(a1, a2)
+        area_min = min(a1, a2)
+        if area_max <= 0 or (area_min / area_max) < self.config.min_area_similarity:
+            return False
+
+        return True
+
     def _geometry_score(
         self,
         track_id_a: int,
@@ -397,26 +535,14 @@ class SpatioTemporalMatcher:
             led1 = track_a.candidate
             led2 = track_b.candidate
             dist = math.hypot(led1.cx - led2.cx, led1.cy - led2.cy)
-
-            min_dist_px = self.config.min_pixel_distance_px
-            if max(led1.area, led2.area) < 100.0:
-                min_dist_px = min(min_dist_px, 22.0)
-
-            if dist < min_dist_px:
-                return 0.0, None, None
-            if dist > self.config.max_pixel_distance_px:
-                return 0.0, None, None
-
+            a1, a2 = led1.area, led2.area
             dy = abs(led1.cy - led2.cy)
-            if dy / max(dist, 1.0) > self.config.max_y_alignment_ratio:
+
+            if not self._geometry_checks(dist, a1, a2, dy):
                 return 0.0, None, None
 
-            area_min = min(led1.area, led2.area)
-            area_max = max(led1.area, led2.area)
-            if area_max <= 0 or (area_min / area_max) < self.config.min_area_similarity:
-                return 0.0, None, None
-
-            return 1.0, led1, led2
+            gate = distance_gate_score(dist, a1, a2, self.config)
+            return gate, led1, led2
 
         geom_a = self.buffers.get_geometry(track_id_a)
         geom_b = self.buffers.get_geometry(track_id_b)
@@ -457,23 +583,12 @@ class SpatioTemporalMatcher:
         if dist_cv > self.config.max_pixel_distance_cv:
             return 0.0, None, None
 
-        if mean_dist < self.config.min_pixel_distance_px:
-            return 0.0, None, None
-
-        if mean_dist > self.config.max_pixel_distance_px:
-            return 0.0, None, None
-
         last_a = samples_a[-1]
         last_b = samples_b[-1]
+        a1, a2 = last_a.area, last_b.area
         dy = abs(last_a.cy - last_b.cy)
 
-        if dy / max(mean_dist, 1.0) > self.config.max_y_alignment_ratio:
-            return 0.0, None, None
-
-        area_min = min(last_a.area, last_b.area)
-        area_max = max(last_a.area, last_b.area)
-
-        if area_max <= 0 or (area_min / area_max) < self.config.min_area_similarity:
+        if not self._geometry_checks(mean_dist, a1, a2, dy):
             return 0.0, None, None
 
         max_jump = 0.0
@@ -486,7 +601,8 @@ class SpatioTemporalMatcher:
             return 0.0, None, None
 
         dist_score = 1.0 - min(1.0, dist_cv / self.config.max_pixel_distance_cv)
-        geometry_score = dist_score
+        gate = distance_gate_score(mean_dist, a1, a2, self.config)
+        geometry_score = dist_score * gate
 
         led1 = LedCandidate(
             x=int(last_a.cx),
@@ -507,9 +623,6 @@ class SpatioTemporalMatcher:
             area=last_b.area,
         )
 
-        track_a = self.tracker.get_track(track_id_a)
-        track_b = self.tracker.get_track(track_id_b)
-
         if track_a is not None and track_a.candidate is not None:
             led1 = track_a.candidate
         if track_b is not None and track_b.candidate is not None:
@@ -517,17 +630,39 @@ class SpatioTemporalMatcher:
 
         return geometry_score, led1, led2
 
+    def _combined_score(self, candidate: PairMatchResult) -> float:
+        combined = candidate.pair_score * candidate.geometry_score
+        if not self.lock_on.active:
+            return combined
+
+        key = tuple(sorted((candidate.track_id_1, candidate.track_id_2)))
+        locked_key = tuple(sorted((self.lock_on.track_id_a, self.lock_on.track_id_b)))
+        if key == locked_key:
+            combined *= self.config.lock_score_boost
+
+        return combined
+
     def find_best_pair(self) -> PairMatchResult | None:
         eligible = self._eligible_tracks()
 
         if len(eligible) < 2:
+            self._update_lock_on(None)
             return None
 
         best: PairMatchResult | None = None
         best_combined = -1.0
 
-        pair_lists: list[tuple[TrackedBlob, TrackedBlob, bool, bool]] = []
+        if self.lock_on.active:
+            locked = self._get_locked_tracks(eligible)
+            if locked is not None:
+                track_a, track_b = locked
+                candidate = self._evaluate_track_pair(track_a, track_b)
+                if candidate is not None:
+                    self._update_lock_on(candidate)
+                    return candidate
+            self._update_lock_on(None)
 
+        pair_lists: list[tuple[TrackedBlob, TrackedBlob, bool, bool]] = []
         far_range = self._is_far_range_scene()
 
         for track_a, track_b in self._priority_pair_candidates(eligible):
@@ -554,13 +689,16 @@ class SpatioTemporalMatcher:
             if candidate is None:
                 continue
 
-            combined = candidate.pair_score * candidate.geometry_score
+            combined = self._combined_score(candidate)
 
             if combined > best_combined:
                 best_combined = combined
                 best = candidate
 
         if best is not None:
+            self._update_lock_on(best)
             return best
 
-        return self._fallback_largest_two_pair()
+        fallback = self._fallback_largest_two_pair()
+        self._update_lock_on(fallback)
+        return fallback
