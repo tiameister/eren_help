@@ -43,7 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-reextract",
         action="store_true",
-        help="Always re-run extract before validating (Phase 4 tuning).",
+        help="Always re-run extract before validating. Required once after P0 "
+        "(new held/read_ok CSV columns); use with --use-cache afterward.",
     )
     parser.add_argument(
         "--matcher",

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import cv2
@@ -23,6 +26,10 @@ from bluerov_led.filtering import SignalSmoother1D, RollingIQRFilter
 from bluerov_led.udp_transport import UdpSender
 
 
+def _float_or_zero(value: float | None) -> float:
+    return 0.0 if value is None else float(value)
+
+
 class BackFacePipeline:
     """Orchestrates extract, decode, filter, calibrate, and packet build."""
 
@@ -34,239 +41,19 @@ class BackFacePipeline:
         self.config = config or VisionConfig()
         self.paths = paths or ProjectPaths()
 
-        self.extractor = LedCandidateExtractor(self.config)
-        self.bit_extractor = BitExtractor(self.config)
-        self.legacy_selector = PairSelector(self.config)
-        self.geometry = GeometryCalculator(self.config)
         self.decoder = TemporalDecoder(self.config)
         self.packet_builder = ObservationPacketBuilder(self.config)
-        self.matcher = SpatioTemporalMatcher(self.config)
+        self._streaming: StreamingPipeline | None = None
 
-    def _reset_stateful_matcher(self) -> None:
-        self.matcher.reset()
-
-    def _process_frame_legacy(
-        self,
-        candidates,
-        image_width: int,
-        image_height: int,
-    ) -> tuple:
-        total_area = self.bit_extractor.total_area(candidates)
-        bit = self.bit_extractor.bit_from_candidates(candidates)
-
-        pair_found = 0
-        led1_x = led1_y = led2_x = led2_y = None
-        pixel_distance = None
-        mid_x = mid_y = error_x = error_y = None
-        ray_x = ray_y = ray_z = None
-        face_id = None
-        pattern = None
-        pattern_accuracy = None
-
-        pair = self.legacy_selector.select(candidates)
-        if pair is not None:
-            c1, c2 = pair
-            geom = self.geometry.compute_pair_geometry(
-                c1, c2, image_width, image_height
-            )
-            pair_found = 1
-            led1_x = geom.led1_x
-            led1_y = geom.led1_y
-            led2_x = geom.led2_x
-            led2_y = geom.led2_y
-            pixel_distance = geom.pixel_distance
-            mid_x = geom.mid_x
-            mid_y = geom.mid_y
-            error_x = geom.error_x
-            error_y = geom.error_y
-            ray_x = geom.ray_x
-            ray_y = geom.ray_y
-            ray_z = geom.ray_z
-
-        return (
-            total_area,
-            bit,
-            pair_found,
-            led1_x,
-            led1_y,
-            led2_x,
-            led2_y,
-            pixel_distance,
-            mid_x,
-            mid_y,
-            error_x,
-            error_y,
-            ray_x,
-            ray_y,
-            ray_z,
-            face_id,
-            pattern,
-            pattern_accuracy,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-
-    def _process_frame_spatio_temporal(
-        self,
-        candidates,
-        image_width: int,
-        image_height: int,
-    ) -> tuple:
-        total_area = self.bit_extractor.total_area(candidates)
-        self.matcher.update_tracks(candidates, image_width, image_height)
-
-        pair_found = 0
-        led1_x = led1_y = led2_x = led2_y = None
-        pixel_distance = None
-        mid_x = mid_y = error_x = error_y = None
-        ray_x = ray_y = ray_z = None
-        face_id = None
-        pattern = None
-        pattern_accuracy = None
-        active_track_count = self.matcher.tracker.active_track_count
-        track_id_1 = track_id_2 = None
-        pair_correlation = pair_score = geometry_score = None
-
-        match = self.matcher.find_best_pair()
-        bit = self.bit_extractor.bit_from_candidates(candidates)
-
-        if match is not None:
-            geom = self.geometry.compute_pair_geometry(
-                match.led1, match.led2, image_width, image_height
-            )
-            pair_found = 1
-            led1_x = geom.led1_x
-            led1_y = geom.led1_y
-            led2_x = geom.led2_x
-            led2_y = geom.led2_y
-            pixel_distance = geom.pixel_distance
-            mid_x = geom.mid_x
-            mid_y = geom.mid_y
-            error_x = geom.error_x
-            error_y = geom.error_y
-            ray_x = geom.ray_x
-            ray_y = geom.ray_y
-            ray_z = geom.ray_z
-            face_id = match.face_id
-            pattern = match.pattern
-            pattern_accuracy = match.pattern_accuracy
-            active_track_count = match.active_track_count
-            track_id_1 = match.track_id_1
-            track_id_2 = match.track_id_2
-            pair_correlation = match.pair_correlation
-            pair_score = match.pair_score
-            geometry_score = match.geometry_score
-            bit = match.fused_bit
-
-        return (
-            total_area,
-            bit,
-            pair_found,
-            led1_x,
-            led1_y,
-            led2_x,
-            led2_y,
-            pixel_distance,
-            mid_x,
-            mid_y,
-            error_x,
-            error_y,
-            ray_x,
-            ray_y,
-            ray_z,
-            face_id,
-            pattern,
-            pattern_accuracy,
-            active_track_count,
-            track_id_1,
-            track_id_2,
-            pair_correlation,
-            pair_score,
-            geometry_score,
-        )
-
-    def _process_frame(
-        self,
-        frame,
-        frame_index: int,
-        file_name: str,
-        candidates,
-    ) -> FrameRecord:
-        image_height, image_width = frame.shape[:2]
-
-        if self.config.matcher_mode == "legacy_largest2":
-            fields = self._process_frame_legacy(
-                candidates, image_width, image_height
+    def _get_streaming(self) -> StreamingPipeline:
+        if self._streaming is None:
+            self._streaming = StreamingPipeline(
+                config=self.config,
+                udp_ip=None,
             )
         else:
-            fields = self._process_frame_spatio_temporal(
-                candidates, image_width, image_height
-            )
-
-        (
-            total_area,
-            bit,
-            pair_found,
-            led1_x,
-            led1_y,
-            led2_x,
-            led2_y,
-            pixel_distance,
-            mid_x,
-            mid_y,
-            error_x,
-            error_y,
-            ray_x,
-            ray_y,
-            ray_z,
-            face_id,
-            pattern,
-            pattern_accuracy,
-            active_track_count,
-            track_id_1,
-            track_id_2,
-            pair_correlation,
-            pair_score,
-            geometry_score,
-        ) = fields
-
-        return FrameRecord(
-            frame=frame_index,
-            file=file_name,
-            candidate_count=len(candidates),
-            total_area=total_area,
-            bit=bit,
-            pair_found=pair_found,
-            led1_x=led1_x,
-            led1_y=led1_y,
-            led2_x=led2_x,
-            led2_y=led2_y,
-            pixel_distance=pixel_distance,
-            mid_x=mid_x,
-            mid_y=mid_y,
-            error_x=error_x,
-            error_y=error_y,
-            ray_x=ray_x,
-            ray_y=ray_y,
-            ray_z=ray_z,
-            camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
-            image_width=image_width,
-            image_height=image_height,
-            face_id=face_id,
-            pattern=pattern,
-            pattern_accuracy=pattern_accuracy,
-            active_track_count=active_track_count,
-            track_id_1=track_id_1,
-            track_id_2=track_id_2,
-            pair_correlation=pair_correlation,
-            pair_score=pair_score,
-            geometry_score=geometry_score,
-            matcher_mode=self.config.matcher_mode,
-        )
+            self._streaming.config = self.config
+        return self._streaming
 
     def _draw_preview(
         self,
@@ -396,8 +183,6 @@ class BackFacePipeline:
         reader = DatasetReader(dataset_folder)
         frame_paths = reader.list_frame_paths()
 
-        self._reset_stateful_matcher()
-
         print("Matcher mode:", self.config.matcher_mode)
         print("Total frame count:", len(frame_paths))
         print(
@@ -407,32 +192,29 @@ class BackFacePipeline:
         )
         print("Frames per bit:", self.config.frames_per_bit)
 
-        records: list[FrameRecord] = []
+        streaming = self._get_streaming()
+        streaming.reset()
 
-        for frame_index, path in enumerate(frame_paths):
-            frame = cv2.imread(str(path))
-            if frame is None:
-                continue
+        def preview_callback(frame, record, candidates, mask_clean, tracks):
+            self._draw_preview(frame, record, candidates, mask_clean, tracks)
+            key = cv2.waitKey(int(1000 / self.config.fps))
+            return key != ord("q")
 
-            candidates, mask_clean = self.extractor.extract(frame)
-            record = self._process_frame(
-                frame, frame_index, path.name, candidates
-            )
-            records.append(record)
-
-            if preview:
-                tracks = (
-                    self.matcher.tracker.list_tracks()
-                    if self.config.matcher_mode != "legacy_largest2"
-                    else None
-                )
-                self._draw_preview(frame, record, candidates, mask_clean, tracks)
-                key = cv2.waitKey(int(1000 / self.config.fps))
-                if key == ord("q"):
-                    break
+        records, read_fail_count = streaming.process_png_sequence(
+            dataset_folder=dataset_folder,
+            dataset_name=dataset,
+            preview=preview,
+            preview_callback=preview_callback if preview else None,
+        )
 
         if preview:
             cv2.destroyAllWindows()
+
+        if read_fail_count > 0:
+            print(
+                f"Read failures: {read_fail_count} / {len(frame_paths)} "
+                "(OFF placeholders inserted)"
+            )
 
         csv_path = self.paths.pair_csv(dataset)
         ArtifactWriter.write_frame_records_csv(csv_path, records)
@@ -610,79 +392,490 @@ class BackFacePipeline:
 
 
 class StreamingPipeline:
-    """True real-time framewise pipeline with Kalman tracking and UDP streaming."""
+    """Canonical frame-by-frame processor (offline PNG and live stream)."""
+
     def __init__(
         self,
         config: VisionConfig | None = None,
         distance_model_dict: dict | None = None,
         udp_ip: str | None = "127.0.0.1",
-        udp_port: int | None = 5005
+        udp_port: int | None = 5005,
     ) -> None:
         self.config = config or VisionConfig()
-        
+
         self.extractor = LedCandidateExtractor(self.config)
+        self.bit_extractor = BitExtractor(self.config)
+        self.legacy_selector = PairSelector(self.config)
         self.matcher = SpatioTemporalMatcher(self.config)
         self.geometry = GeometryCalculator(self.config)
         self.packet_builder = ObservationPacketBuilder(self.config)
-        self.distance_model = DistanceModel.from_summary_dict(distance_model_dict) if distance_model_dict else DistanceModel.fit()
+        if distance_model_dict is not None:
+            self.distance_model = DistanceModel.from_summary_dict(
+                distance_model_dict
+            )
+        else:
+            self.distance_model = DistanceModel.fit()
 
         self.udp_sender = UdpSender(udp_ip, udp_port) if udp_ip else None
-        
-        # Filtering States
-        self.rolling_iqr = RollingIQRFilter(self.config.rolling_iqr_window, self.config.outlier_distance_rejection_iqr_multiplier)
+
+        self.rolling_iqr = RollingIQRFilter(
+            self.config.rolling_iqr_window,
+            self.config.outlier_distance_rejection_iqr_multiplier,
+        )
         self.distance_lpf = SignalSmoother1D(self.config.signal_1d_lpf_alpha)
         self.error_norm_lpf = SignalSmoother1D(self.config.signal_1d_lpf_alpha)
         self.error_x_lpf = SignalSmoother1D(self.config.signal_1d_lpf_alpha)
         self.error_y_lpf = SignalSmoother1D(self.config.signal_1d_lpf_alpha)
-        
-        # M-Frame Failsafe Holding
+
+        self.last_valid_packet: dict | None = None
+        self.invalid_frames_count = 0
+        self.udp_seq = 0
+        self._sequence_size: tuple[int, int] | None = None
+        self._read_fail_count = 0
+
+    def reset(self) -> None:
+        self.matcher.reset()
+        self.rolling_iqr.reset()
+        self.distance_lpf.reset()
+        self.error_norm_lpf.reset()
+        self.error_x_lpf.reset()
+        self.error_y_lpf.reset()
         self.last_valid_packet = None
         self.invalid_frames_count = 0
         self.udp_seq = 0
+        self._sequence_size = None
+        self._read_fail_count = 0
 
-    def process_frame(self, frame_img, dataset_name: str, frame_index: int, dt: float | None = None):
+    def _emit_pid_udp(
+        self,
+        *,
+        valid: bool,
+        error_yaw: float,
+        error_heave: float,
+        distance_surge: float,
+    ) -> None:
+        if self.udp_sender is None:
+            return
+        self.udp_sender.send_pid_packet(
+            valid=valid,
+            error_yaw=error_yaw,
+            error_heave=error_heave,
+            distance_surge=distance_surge,
+        )
+
+    def _emit_pid_lost(self) -> None:
+        self._emit_pid_udp(
+            valid=False,
+            error_yaw=0.0,
+            error_heave=0.0,
+            distance_surge=0.0,
+        )
+
+    def _emit_pid_from_observation(
+        self,
+        packet: dict | None,
+        *,
+        is_valid: bool,
+        held: bool,
+    ) -> None:
+        if is_valid and packet is not None:
+            self._emit_pid_udp(
+                valid=True,
+                error_yaw=_float_or_zero(packet.get("error_x")),
+                error_heave=_float_or_zero(packet.get("error_y")),
+                distance_surge=_float_or_zero(packet.get("estimated_distance")),
+            )
+        elif held and packet is not None:
+            self._emit_pid_udp(
+                valid=False,
+                error_yaw=_float_or_zero(packet.get("error_x")),
+                error_heave=_float_or_zero(packet.get("error_y")),
+                distance_surge=_float_or_zero(packet.get("estimated_distance")),
+            )
+        else:
+            self._emit_pid_lost()
+
+    def _set_sequence_size(self, image_width: int, image_height: int) -> None:
+        self._sequence_size = (image_width, image_height)
+
+    def _sequence_dimensions(self) -> tuple[int, int]:
+        if self._sequence_size is not None:
+            return self._sequence_size
+        return 0, 0
+
+    def _make_read_failure_record(
+        self,
+        frame_index: int,
+        file_name: str,
+    ) -> FrameRecord:
+        image_width, image_height = self._sequence_dimensions()
+        dt = 1.0 / self.config.fps
+
+        if image_width > 0 and image_height > 0:
+            if self.config.matcher_mode != "legacy_largest2":
+                self.matcher.update_tracks([], image_width, image_height, dt)
+
+        return FrameRecord(
+            frame=frame_index,
+            file=file_name,
+            candidate_count=0,
+            total_area=0.0,
+            bit=0,
+            pair_found=0,
+            led1_x=None,
+            led1_y=None,
+            led2_x=None,
+            led2_y=None,
+            pixel_distance=None,
+            mid_x=None,
+            mid_y=None,
+            error_x=None,
+            error_y=None,
+            ray_x=None,
+            ray_y=None,
+            ray_z=None,
+            camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
+            image_width=image_width,
+            image_height=image_height,
+            active_track_count=(
+                self.matcher.tracker.active_track_count
+                if self.config.matcher_mode != "legacy_largest2"
+                else 0
+            ),
+            matcher_mode=self.config.matcher_mode,
+            held=0,
+            read_ok=0,
+        )
+
+    def _build_legacy_frame_record(
+        self,
+        candidates,
+        image_width: int,
+        image_height: int,
+        frame_index: int,
+        file_name: str,
+    ) -> FrameRecord:
+        total_area = self.bit_extractor.total_area(candidates)
+        bit = self.bit_extractor.bit_from_candidates(candidates)
+
+        pair_found = 0
+        led1_x = led1_y = led2_x = led2_y = None
+        pixel_distance = None
+        mid_x = mid_y = error_x = error_y = None
+        ray_x = ray_y = ray_z = None
+        face_id = None
+        pattern = None
+        pattern_accuracy = None
+
+        pair = self.legacy_selector.select(candidates)
+        if pair is not None:
+            c1, c2 = pair
+            geom = self.geometry.compute_pair_geometry(
+                c1, c2, image_width, image_height
+            )
+            pair_found = 1
+            led1_x = geom.led1_x
+            led1_y = geom.led1_y
+            led2_x = geom.led2_x
+            led2_y = geom.led2_y
+            pixel_distance = geom.pixel_distance
+            mid_x = geom.mid_x
+            mid_y = geom.mid_y
+            error_x = geom.error_x
+            error_y = geom.error_y
+            ray_x = geom.ray_x
+            ray_y = geom.ray_y
+            ray_z = geom.ray_z
+
+        return FrameRecord(
+            frame=frame_index,
+            file=file_name,
+            candidate_count=len(candidates),
+            total_area=total_area,
+            bit=bit,
+            pair_found=pair_found,
+            led1_x=led1_x,
+            led1_y=led1_y,
+            led2_x=led2_x,
+            led2_y=led2_y,
+            pixel_distance=pixel_distance,
+            mid_x=mid_x,
+            mid_y=mid_y,
+            error_x=error_x,
+            error_y=error_y,
+            ray_x=ray_x,
+            ray_y=ray_y,
+            ray_z=ray_z,
+            camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
+            image_width=image_width,
+            image_height=image_height,
+            face_id=face_id,
+            pattern=pattern,
+            pattern_accuracy=pattern_accuracy,
+            active_track_count=0,
+            matcher_mode="legacy_largest2",
+            held=0,
+            read_ok=1,
+        )
+
+    def _spatio_frame_record(
+        self,
+        *,
+        frame_index: int,
+        file_name: str,
+        candidates,
+        image_width: int,
+        image_height: int,
+        frame_bit: int,
+        match,
+        geom,
+        observation_valid: bool,
+        held: bool,
+    ) -> FrameRecord:
+        active_count = self.matcher.tracker.active_track_count
+
+        if observation_valid and match is not None and geom is not None:
+            return FrameRecord(
+                frame=frame_index,
+                file=file_name,
+                candidate_count=len(candidates),
+                total_area=self.bit_extractor.total_area(candidates),
+                bit=frame_bit,
+                pair_found=1,
+                led1_x=geom.led1_x,
+                led1_y=geom.led1_y,
+                led2_x=geom.led2_x,
+                led2_y=geom.led2_y,
+                pixel_distance=geom.pixel_distance,
+                mid_x=geom.mid_x,
+                mid_y=geom.mid_y,
+                error_x=geom.error_x,
+                error_y=geom.error_y,
+                ray_x=geom.ray_x,
+                ray_y=geom.ray_y,
+                ray_z=geom.ray_z,
+                camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
+                image_width=image_width,
+                image_height=image_height,
+                face_id=match.face_id,
+                pattern=match.pattern,
+                pattern_accuracy=match.pattern_accuracy,
+                active_track_count=active_count,
+                track_id_1=match.track_id_1,
+                track_id_2=match.track_id_2,
+                pair_correlation=match.pair_correlation,
+                pair_score=match.pair_score,
+                geometry_score=match.geometry_score,
+                matcher_mode=self.config.matcher_mode,
+                held=0,
+                read_ok=1,
+            )
+
+        return FrameRecord(
+            frame=frame_index,
+            file=file_name,
+            candidate_count=len(candidates),
+            total_area=self.bit_extractor.total_area(candidates),
+            bit=frame_bit,
+            pair_found=0,
+            led1_x=None,
+            led1_y=None,
+            led2_x=None,
+            led2_y=None,
+            pixel_distance=None,
+            mid_x=None,
+            mid_y=None,
+            error_x=None,
+            error_y=None,
+            ray_x=None,
+            ray_y=None,
+            ray_z=None,
+            camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
+            image_width=image_width,
+            image_height=image_height,
+            face_id=None,
+            pattern=None,
+            pattern_accuracy=None,
+            active_track_count=active_count,
+            track_id_1=None,
+            track_id_2=None,
+            pair_correlation=None,
+            pair_score=None,
+            geometry_score=None,
+            matcher_mode=self.config.matcher_mode,
+            held=1 if held else 0,
+            read_ok=1,
+        )
+
+    def process_png_sequence(
+        self,
+        dataset_folder: Path,
+        dataset_name: str,
+        preview: bool = False,
+        preview_callback: Callable[..., bool] | None = None,
+    ) -> tuple[list[FrameRecord], int]:
+        reader = DatasetReader(dataset_folder)
+        frame_paths = reader.list_frame_paths()
+        records: list[FrameRecord] = []
+        dt = 1.0 / self.config.fps
+
+        for frame_index, path in enumerate(frame_paths):
+            frame = cv2.imread(str(path))
+            if frame is None:
+                self._read_fail_count += 1
+                record = self._make_read_failure_record(frame_index, path.name)
+                self._emit_pid_lost()
+                records.append(record)
+                continue
+
+            self._set_sequence_size(frame.shape[1], frame.shape[0])
+            _packet, candidates, mask_clean, record = self.process_frame(
+                frame,
+                dataset_name,
+                frame_index,
+                file_name=path.name,
+                dt=dt,
+            )
+            records.append(record)
+
+            if preview and preview_callback is not None and record.read_ok:
+                tracks = (
+                    self.matcher.tracker.list_tracks()
+                    if self.config.matcher_mode != "legacy_largest2"
+                    else None
+                )
+                if not preview_callback(
+                    frame, record, candidates, mask_clean, tracks
+                ):
+                    break
+
+        return records, self._read_fail_count
+
+    def stream_png_sequence(
+        self,
+        dataset_folder: Path,
+        dataset_name: str,
+        *,
+        realtime_pacing: bool = True,
+    ) -> tuple[int, int]:
+        """Process and emit PID UDP per frame without accumulating CSV records."""
+        reader = DatasetReader(dataset_folder)
+        frame_paths = reader.list_frame_paths()
+        dt = 1.0 / self.config.fps
+        frame_interval = dt if realtime_pacing else 0.0
+        frames_processed = 0
+
+        for frame_index, path in enumerate(frame_paths):
+            loop_start = time.perf_counter()
+
+            frame = cv2.imread(str(path))
+            if frame is None:
+                self._read_fail_count += 1
+                self._make_read_failure_record(frame_index, path.name)
+                self._emit_pid_lost()
+            else:
+                self._set_sequence_size(frame.shape[1], frame.shape[0])
+                self.process_frame(
+                    frame,
+                    dataset_name,
+                    frame_index,
+                    file_name=path.name,
+                    dt=dt,
+                )
+                frames_processed += 1
+
+            if frame_interval > 0:
+                elapsed = time.perf_counter() - loop_start
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+        return frames_processed, self._read_fail_count
+
+    def process_frame(
+        self,
+        frame_img,
+        dataset_name: str,
+        frame_index: int,
+        file_name: str = "stream",
+        dt: float | None = None,
+    ):
         image_height, image_width = frame_img.shape[:2]
         dt = dt if dt is not None else (1.0 / self.config.fps)
-        
+        self._set_sequence_size(image_width, image_height)
+
         candidates, mask_clean = self.extractor.extract(frame_img)
+
+        if self.config.matcher_mode == "legacy_largest2":
+            record = self._build_legacy_frame_record(
+                candidates,
+                image_width,
+                image_height,
+                frame_index,
+                file_name,
+            )
+            return None, candidates, mask_clean, record
+
+        return self._process_frame_spatio(
+            frame_img,
+            dataset_name,
+            frame_index,
+            file_name,
+            candidates,
+            mask_clean,
+            image_width,
+            image_height,
+            dt,
+        )
+
+    def _process_frame_spatio(
+        self,
+        frame_img,
+        dataset_name: str,
+        frame_index: int,
+        file_name: str,
+        candidates,
+        mask_clean,
+        image_width: int,
+        image_height: int,
+        dt: float,
+    ):
         self.matcher.update_tracks(candidates, image_width, image_height, dt)
-        
+
         match = self.matcher.find_best_pair()
-        
-        # Original bit calculation parity
+
         frame_bit = self.bit_extractor.bit_from_candidates(candidates)
         if match is not None:
             frame_bit = match.fused_bit
-        
+
         is_valid = False
-        packet = None
-        
+        packet: dict | None = None
+        geom = None
+
         if match is not None:
             geom = self.geometry.compute_pair_geometry(
                 match.led1, match.led2, image_width, image_height
             )
             raw_px_dist = geom.pixel_distance
-            
-            # Online Outlier filtering
+
             if not self.rolling_iqr.is_outlier(raw_px_dist):
                 self.rolling_iqr.add_valid(raw_px_dist)
                 is_valid = True
-                
-                # Estimate distance
+
                 est_dist = self.distance_model.estimate(raw_px_dist)
-                dist_conf = self.distance_model.confidence(raw_px_dist, match.pattern_accuracy) if raw_px_dist is not None else 0.0
-                
-                # Apply 1D low pass filters for control outputs
+                dist_conf = self.distance_model.confidence(
+                    raw_px_dist, match.pattern_accuracy
+                )
+
                 smoothed_dist = self.distance_lpf.update(est_dist)
                 smoothed_err_x = self.error_x_lpf.update(geom.error_x)
                 smoothed_err_y = self.error_y_lpf.update(geom.error_y)
-                
-                import math
-                calc_error_norm = math.sqrt(geom.error_x**2 + geom.error_y**2)
+                calc_error_norm = math.sqrt(geom.error_x ** 2 + geom.error_y ** 2)
                 smoothed_err_norm = self.error_norm_lpf.update(calc_error_norm)
-                
+
                 packet = {
                     "valid": True,
+                    "held": False,
                     "dataset": dataset_name,
                     "frame": frame_index,
                     "face_id": match.face_id,
@@ -699,23 +892,29 @@ class StreamingPipeline:
                     "error_x": smoothed_err_x,
                     "error_y": smoothed_err_y,
                     "error_norm": smoothed_err_norm,
-                    "ray_cam": [geom.ray_x, geom.ray_y, geom.ray_z] if geom.ray_z else None,
+                    "ray_cam": [geom.ray_x, geom.ray_y, geom.ray_z],
                     "pixel_distance": raw_px_dist,
                     "estimated_distance": smoothed_dist,
                     "distance_confidence": dist_conf,
                     "total_area": match.led1.area + match.led2.area,
                     "bit": match.fused_bit,
                 }
-                
+
                 self.last_valid_packet = packet
                 self.invalid_frames_count = 0
 
+        held = False
         if not is_valid:
-            # Hold Last Valid Logic
             self.invalid_frames_count += 1
-            if self.invalid_frames_count <= self.config.max_hold_frames and self.last_valid_packet is not None:
+            if (
+                self.invalid_frames_count <= self.config.max_hold_frames
+                and self.last_valid_packet is not None
+            ):
                 packet = dict(self.last_valid_packet)
                 packet["frame"] = frame_index
+                packet["valid"] = False
+                packet["held"] = True
+                held = True
             else:
                 self.distance_lpf.reset()
                 self.error_norm_lpf.reset()
@@ -723,51 +922,29 @@ class StreamingPipeline:
                 self.error_y_lpf.reset()
                 packet = {
                     "valid": False,
+                    "held": False,
                     "dataset": dataset_name,
                     "frame": frame_index,
-                    "reason": "lost_or_outlier"
+                    "reason": "lost_or_outlier",
                 }
-                
-        if self.udp_sender is not None:
-            self.udp_sender.send_packet(packet, self.udp_seq)
-            self.udp_seq += 1
-            
-        # Also return a FrameRecord equivalent for validation tests
-        fake_candidates_count = len(candidates)
-        active_count = self.matcher.tracker.active_track_count
-        
-        record = FrameRecord(
-            frame=frame_index,
-            file="stream",
-            candidate_count=fake_candidates_count,
-            total_area=self.bit_extractor.total_area(candidates),
-            bit=frame_bit,
-            pair_found=1 if packet and packet.get("valid") else 0,
-            led1_x=packet.get("led1_x") if packet else None,
-            led1_y=packet.get("led1_y") if packet else None,
-            led2_x=packet.get("led2_x") if packet else None,
-            led2_y=packet.get("led2_y") if packet else None,
-            pixel_distance=packet.get("pixel_distance") if packet else None,
-            mid_x=packet.get("mid_x") if packet else None,
-            mid_y=packet.get("mid_y") if packet else None,
-            error_x=packet.get("error_x") if packet else None,
-            error_y=packet.get("error_y") if packet else None,
-            ray_x=packet.get("ray_cam")[0] if packet and packet.get("ray_cam") else None,
-            ray_y=packet.get("ray_cam")[1] if packet and packet.get("ray_cam") else None,
-            ray_z=packet.get("ray_cam")[2] if packet and packet.get("ray_cam") else None,
-            camera_vertical_fov_deg=self.config.camera_vertical_fov_deg,
+
+        self._emit_pid_from_observation(
+            packet,
+            is_valid=is_valid,
+            held=held,
+        )
+
+        record = self._spatio_frame_record(
+            frame_index=frame_index,
+            file_name=file_name,
+            candidates=candidates,
             image_width=image_width,
             image_height=image_height,
-            face_id=packet.get("face_id") if packet else None,
-            pattern=self.config.face_patterns.get(packet.get("face_id"), None) if packet and packet.get("face_id") else None,
-            pattern_accuracy=packet.get("pattern_accuracy") if packet else None,
-            active_track_count=active_count,
-            track_id_1=packet.get("track_id_1") if packet else None,
-            track_id_2=packet.get("track_id_2") if packet else None,
-            pair_correlation=None, # Online we mainly care about decoding output
-            pair_score=None,
-            geometry_score=None,
-            matcher_mode="streaming"
+            frame_bit=frame_bit,
+            match=match,
+            geom=geom,
+            observation_valid=is_valid,
+            held=held,
         )
         return packet, candidates, mask_clean, record
 

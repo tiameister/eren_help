@@ -66,6 +66,8 @@ class FrameRecord:
     pair_score: float | None = None
     geometry_score: float | None = None
     matcher_mode: str = "spatio_temporal"
+    held: int = 0
+    read_ok: int = 1
 
     def to_csv_row(self) -> dict[str, Any]:
         return asdict(self)

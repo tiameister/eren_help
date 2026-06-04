@@ -136,6 +136,8 @@ def validate_dataset_csv(
     eligible_on_count = len(eligible_on)
 
     paired = work[work["pair_found"] == 1]
+    if "held" in paired.columns:
+        paired = paired[paired["held"] != 1]
     pair_found_count = len(paired)
 
     if "face_id" in paired.columns:
@@ -332,6 +334,8 @@ class ValidationRunner:
         "pattern_accuracy",
         "pixel_distance",
         "bit",
+        "held",
+        "read_ok",
     )
 
     def _csv_is_compatible(self, csv_path: Path) -> bool:
@@ -359,42 +363,10 @@ class ValidationRunner:
             return csv_path
 
         if use_cache and csv_path.exists():
-            print(f"  Cached CSV missing Phase 2 columns; re-extracting.")
+            print(f"  Cached CSV missing required columns; re-extracting.")
 
-        dataset_folder = self.paths.dataset_folder(spec.dataset_name)
-
-        import cv2
-        from bluerov_led.pipeline import StreamingPipeline
-        from bluerov_led.dataset_io import DatasetReader
-
-        reader = DatasetReader(dataset_folder)
-        frame_paths = reader.list_frame_paths()
-
-        if not frame_paths:
-            raise FileNotFoundError(
-                f"No PNG frames found for dataset: {dataset_folder}"
-            )
-
-        print(f"  Running streaming extract on {spec.dataset_name} ...")
-        
-        # Instantiate the new online streaming pipeline
-        streaming_pipeline = StreamingPipeline(config=self.config, distance_model_dict=self.distance_model.to_summary_dict())
-        records = []
-        
-        for i, path in enumerate(frame_paths):
-            frame = cv2.imread(str(path))
-            if frame is None:
-                continue
-            
-            # Simulating real-time ingestion
-            packet, candidates, mask_clean, record = streaming_pipeline.process_frame(frame, spec.dataset_name, i)
-            record.file = path.name
-            records.append(record)
-
-        # Write output frame records using standard method
-        from bluerov_led.dataset_io import ArtifactWriter
-        ArtifactWriter.write_frame_records_csv(csv_path, records)
-        return csv_path
+        print(f"  Running extract on {spec.dataset_name} ...")
+        return self.pipeline.extract(spec.dataset_name, preview=False)
 
     def validate_one(
         self,

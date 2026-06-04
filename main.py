@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 
 from bluerov_led.config import ProjectPaths, VisionConfig
-from bluerov_led.pipeline import BackFacePipeline
+from bluerov_led.dataset_io import ArtifactWriter
+from bluerov_led.distance_model import DistanceModel
+from bluerov_led.pipeline import BackFacePipeline, StreamingPipeline
 from bluerov_led.preview import preview_dataset
 from bluerov_led.udp_transport import UdpReceiver, UdpSender
 
@@ -94,6 +96,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_recv.add_argument("--port", type=int, default=5005)
     p_recv.add_argument("--timeout", type=float, default=None)
 
+    p_stream = sub.add_parser(
+        "stream-udp",
+        help="Real-time PID UDP stream from PNG dataset (Kalman/IQR/LPF).",
+    )
+    p_stream.add_argument("--dataset", required=True)
+    p_stream.add_argument("--ip", default="127.0.0.1")
+    p_stream.add_argument("--port", type=int, default=5005)
+    p_stream.add_argument(
+        "--no-pacing",
+        action="store_true",
+        help="Process frames as fast as possible (no FPS sleep).",
+    )
+
     return parser
 
 
@@ -171,6 +186,45 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "recv-udp":
         UdpReceiver(host=args.host, port=args.port, timeout=args.timeout).run()
+        return 0
+
+    if args.command == "stream-udp":
+        root = Path(__file__).resolve().parent
+        paths = ProjectPaths(
+            project_root=root,
+            datasets_dir=args.datasets_dir,
+            outputs_dir=args.outputs_dir,
+        )
+        config = VisionConfig(matcher_mode="spatio_temporal")
+
+        model_path = paths.distance_model_json()
+        model_data = ArtifactWriter.read_json(model_path)
+        distance_model_dict = (
+            model_data if model_data is not None else DistanceModel.fit().to_summary_dict()
+        )
+
+        streaming = StreamingPipeline(
+            config=config,
+            distance_model_dict=distance_model_dict,
+            udp_ip=args.ip,
+            udp_port=args.port,
+        )
+        try:
+            streaming.reset()
+            dataset_folder = paths.dataset_folder(args.dataset)
+            frames_processed, read_fail_count = streaming.stream_png_sequence(
+                dataset_folder,
+                args.dataset,
+                realtime_pacing=not args.no_pacing,
+            )
+            print("PID UDP stream finished.")
+            print("Destination:", f"{args.ip}:{args.port}")
+            print("Frames processed:", frames_processed)
+            if read_fail_count > 0:
+                print("Read failures:", read_fail_count)
+        finally:
+            if streaming.udp_sender is not None:
+                streaming.udp_sender.close()
         return 0
 
     parser.print_help()

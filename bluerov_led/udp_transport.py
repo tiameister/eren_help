@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from bluerov_led.pid_packet import PID_PACKET_KEYS, build_pid_udp_packet
+
 
 class UdpSender:
     """Send observation packets as UTF-8 JSON over UDP."""
@@ -21,6 +23,27 @@ class UdpSender:
         packet_to_send["udp_seq"] = seq
         packet_to_send["sent_time_unix"] = time.time()
         payload = json.dumps(packet_to_send).encode("utf-8")
+        self._sock.sendto(payload, self.destination)
+        return len(payload)
+
+    def send_pid_packet(
+        self,
+        *,
+        valid: bool,
+        error_yaw: float,
+        error_heave: float,
+        distance_surge: float,
+    ) -> int:
+        """Send lean 5-field PID JSON (no udp_seq or extra metadata)."""
+        packet = build_pid_udp_packet(
+            valid=valid,
+            error_yaw=error_yaw,
+            error_heave=error_heave,
+            distance_surge=distance_surge,
+        )
+        payload = json.dumps(
+            {key: packet[key] for key in PID_PACKET_KEYS}
+        ).encode("utf-8")
         self._sock.sendto(payload, self.destination)
         return len(payload)
 
