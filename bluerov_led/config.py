@@ -70,7 +70,7 @@ class VisionConfig:
     upper_hsv: tuple[int, int, int] = (95, 147, 226)
 
     min_area: float = 15.0
-    max_area: float = 6000.0
+    max_area: float = 10000.0
     min_aspect_ratio: float = 0.25
     max_aspect_ratio: float = 4.50
     on_area_threshold: float = 28.0
@@ -85,31 +85,31 @@ class VisionConfig:
     matcher_mode: str = "spatio_temporal"
 
     # Centroid tracker
-    max_match_distance_px: float = 80.0
-    max_missed_frames: int = 18
+    max_match_distance_px: float = 115.0
+    max_missed_frames: int = 32
     centroid_ema_alpha: float = 0.6
-    min_track_age_frames: int = 6
+    min_track_age_frames: int = 2
 
     # Per-track temporal buffers
     signal_buffer_maxlen: int = 60
     geometry_history_maxlen: int = 30
-    min_pair_frames: int = 18
+    min_pair_frames: int = 6
     min_decode_frames: int = 48
 
     # Correlation and face decode
-    min_pair_correlation: float = 0.88
-    min_pair_score: float = 0.75
-    prefer_matched_tracks: bool = True
-    high_correlation_fallback: float = 0.95
+    min_pair_correlation: float = 0.82
+    min_pair_score: float = 0.58
+    prefer_matched_tracks: bool = False
+    high_correlation_fallback: float = 0.88
 
     # Geometry sanity
     geometry_window_frames: int = 15
-    max_pixel_distance_cv: float = 0.10
-    min_pixel_distance_px: float = 28.0
-    max_pixel_distance_px: float = 260.0
-    max_y_alignment_ratio: float = 0.5
-    min_area_similarity: float = 0.35
-    max_midpoint_jump_px: float = 30.0
+    max_pixel_distance_cv: float = 0.22
+    min_pixel_distance_px: float = 20.0
+    max_pixel_distance_px: float = 300.0
+    max_y_alignment_ratio: float = 0.60
+    min_area_similarity: float = 0.28
+    max_midpoint_jump_px: float = 48.0
 
     # Legacy largest2 (Phase 1 parity)
     require_exactly_two_candidates: bool = False
@@ -119,8 +119,8 @@ class VisionConfig:
     kf_process_noise_pos: float = 0.5
     kf_process_noise_vel: float = 0.05
     kf_measurement_noise_pos: float = 0.5
-    rolling_iqr_window: int = 30
-    outlier_distance_rejection_iqr_multiplier: float = 1.5
+    rolling_iqr_window: int = 50
+    outlier_distance_rejection_iqr_multiplier: float = 3.5
     signal_1d_lpf_alpha: float = 0.3
     max_hold_frames: int = 15
 

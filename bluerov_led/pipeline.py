@@ -718,6 +718,9 @@ class StreamingPipeline:
         frame_paths = reader.list_frame_paths()
         records: list[FrameRecord] = []
         dt = 1.0 / self.config.fps
+        total_frames = len(frame_paths)
+
+        print(f"PROGRESS: 0/{total_frames}", flush=True)
 
         for frame_index, path in enumerate(frame_paths):
             frame = cv2.imread(str(path))
@@ -748,6 +751,8 @@ class StreamingPipeline:
                     frame, record, candidates, mask_clean, tracks
                 ):
                     break
+
+            print(f"PROGRESS: {frame_index + 1}/{total_frames}", flush=True)
 
         return records, self._read_fail_count
 

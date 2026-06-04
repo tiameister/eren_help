@@ -368,6 +368,23 @@ class ValidationRunner:
         print(f"  Running extract on {spec.dataset_name} ...")
         return self.pipeline.extract(spec.dataset_name, preview=False)
 
+    @staticmethod
+    def print_validation_result(result: DatasetValidationResult) -> None:
+        dist_mae = (
+            result.distance_mae
+            if result.distance_mae is not None
+            else -1.0
+        )
+        print(
+            "VALIDATION_RESULT: "
+            f"pair_recall={result.pair_recall_on_frames:.6f} "
+            f"face_acc={result.face_id_accuracy_on_pairs:.6f} "
+            f"temporal={result.temporal_decode_accuracy:.6f} "
+            f"dist_mae={dist_mae:.6f} "
+            f"passed={1 if result.passed else 0}",
+            flush=True,
+        )
+
     def validate_one(
         self,
         spec: DatasetTestSpec,
@@ -380,13 +397,16 @@ class ValidationRunner:
             force_reextract=force_reextract,
         )
         df = ArtifactWriter.read_frame_records_csv(csv_path)
-        return validate_dataset_csv(
+        print("PHASE: metrics", flush=True)
+        result = validate_dataset_csv(
             df=df,
             spec=spec,
             distance_model=self.distance_model,
             config=self.config,
             thresholds=self.thresholds,
         )
+        self.print_validation_result(result)
+        return result
 
     def run_all(
         self,
