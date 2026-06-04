@@ -233,23 +233,6 @@ class RollingIQRFilter:
             effective_multiplier=k_eff,
         )
 
-    def is_outlier(self, val: float) -> bool:
-        """Legacy blind check (no confidence). Prefer evaluate()."""
-        if len(self.buffer) < 5:
-            return False
-
-        q1 = float(np.percentile(self.buffer, 25))
-        q3 = float(np.percentile(self.buffer, 75))
-        iqr = q3 - q1
-
-        if iqr < 1e-3:
-            return False
-
-        lower_bound = q1 - self.iqr_multiplier * iqr
-        upper_bound = q3 + self.iqr_multiplier * iqr
-
-        return not (lower_bound <= val <= upper_bound)
-        
     def add_valid(self, val: float):
         """Add verified valid observation into the rolling ring buffer constraint."""
         self.buffer.append(val)

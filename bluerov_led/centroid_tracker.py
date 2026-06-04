@@ -23,7 +23,7 @@ class TrackedBlob:
 
 
 class CentroidTracker:
-    """Greedy nearest-neighbor centroid tracker with EMA smoothing."""
+    """Greedy nearest-neighbor centroid tracker with per-track Kalman smoothing."""
 
     def __init__(self, config: VisionConfig) -> None:
         self.config = config
@@ -34,7 +34,7 @@ class CentroidTracker:
     def reset(self) -> None:
         self._tracks.clear()
         self._next_id = 1
-        self._match_distance = None
+        self._match_distance = None  # recompute if image dimensions change
 
     def _ensure_match_distance(self, image_width: int, image_height: int) -> float:
         if self._match_distance is None:

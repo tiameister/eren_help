@@ -90,7 +90,6 @@ class VisionConfig:
     # Centroid tracker
     max_match_distance_px: float = 115.0
     max_missed_frames: int = 32
-    centroid_ema_alpha: float = 0.6
     min_track_age_frames: int = 2
 
     # Per-track temporal buffers
@@ -119,6 +118,7 @@ class VisionConfig:
     min_pixel_distance_far_px: float = 22.0
     near_field_area_threshold: float = 500.0
     dynamic_min_distance_soft_margin_px: float = 8.0
+    # Optional cap scaled by blob area; disabled by default (min-only path is production).
     dynamic_max_distance_enabled: bool = False
     dynamic_max_distance_d_ref: float = 168.0
     dynamic_max_distance_r_ref: float = 60.0

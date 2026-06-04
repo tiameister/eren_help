@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -392,6 +394,12 @@ class ProcessConsole:
             current = int(progress_match.group(1))
             total = int(progress_match.group(2))
             self.on_progress(current, total)
+            if self.tag == "video":
+                self.append_line(stripped)
+            return
+
+        if self.tag == "video" and stripped.startswith("Processing frame"):
+            self.append_line(stripped)
             return
 
         phase_match = PHASE_RE.match(stripped)
@@ -472,7 +480,18 @@ class PipelineDashboard(QMainWindow):
         left_title.setObjectName("panelTitle")
         left_layout.addWidget(left_title)
 
-        # STEP 1 — Data Source
+        self.control_tabs = QTabWidget()
+        offline_tab = QWidget()
+        offline_layout = QVBoxLayout(offline_tab)
+        offline_layout.setContentsMargins(4, 8, 4, 4)
+        offline_layout.setSpacing(8)
+
+        video_tab = QWidget()
+        video_layout = QVBoxLayout(video_tab)
+        video_layout.setContentsMargins(4, 8, 4, 4)
+        video_layout.setSpacing(8)
+
+        # STEP 1 — Data Source (offline tab)
         step1 = QGroupBox("STEP 1 — Data Source")
         step1_layout = QVBoxLayout(step1)
         step1_layout.setSpacing(8)
@@ -482,11 +501,6 @@ class PipelineDashboard(QMainWindow):
         self.dataset_combo = QComboBox()
         self.dataset_combo.currentIndexChanged.connect(self._update_enablement)
         row_a.addWidget(self.dataset_combo, stretch=1)
-
-        self.mp4_btn = QPushButton("Select MP4")
-        self.mp4_btn.setEnabled(False)
-        self.mp4_btn.setToolTip("Coming in a future release")
-        row_a.addWidget(self.mp4_btn)
 
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._refresh_datasets)
@@ -510,7 +524,7 @@ class PipelineDashboard(QMainWindow):
         row_b.addStretch()
         step1_layout.addLayout(row_b)
 
-        left_layout.addWidget(step1)
+        offline_layout.addWidget(step1)
 
         # STEP 2 — Validation
         step2 = QGroupBox("STEP 2 — Offline Analysis & Validation")
@@ -536,7 +550,7 @@ class PipelineDashboard(QMainWindow):
         self.progress_status.setObjectName("statusHint")
         step2_layout.addWidget(self.progress_status)
 
-        left_layout.addWidget(step2)
+        offline_layout.addWidget(step2)
 
         # STEP 3 — Live Stream
         step3 = QGroupBox("STEP 3 — Live PID Stream")
@@ -577,8 +591,55 @@ class PipelineDashboard(QMainWindow):
         self.no_pacing_cb = QCheckBox("Max speed (--no-pacing)")
         step3_layout.addWidget(self.no_pacing_cb)
 
-        left_layout.addWidget(step3)
-        left_layout.addStretch()
+        offline_layout.addWidget(step3)
+        offline_layout.addStretch()
+
+        # MP4 Video tab
+        video_group = QGroupBox("Process MP4 Video")
+        video_group_layout = QVBoxLayout(video_group)
+        video_group_layout.setSpacing(8)
+
+        video_path_row = QHBoxLayout()
+        self.video_path_edit = QLineEdit()
+        self.video_path_edit.setPlaceholderText("Select an input .mp4 file…")
+        self.video_path_edit.textChanged.connect(self._update_enablement)
+        video_path_row.addWidget(self.video_path_edit, stretch=1)
+
+        self.mp4_browse_btn = QPushButton("Browse…")
+        self.mp4_browse_btn.clicked.connect(self._browse_mp4)
+        video_path_row.addWidget(self.mp4_browse_btn)
+        video_group_layout.addLayout(video_path_row)
+
+        self.video_process_btn = QPushButton("Start Video Processing")
+        self.video_process_btn.setObjectName("primaryValidation")
+        self.video_process_btn.clicked.connect(self._run_video_processing)
+        video_group_layout.addWidget(self.video_process_btn)
+
+        self.video_progress_bar = QProgressBar()
+        self.video_progress_bar.setRange(0, 100)
+        self.video_progress_bar.setValue(0)
+        self.video_progress_bar.setFormat("%p%  ·  %v / %m frames")
+        self.video_progress_bar.setVisible(False)
+        video_group_layout.addWidget(self.video_progress_bar)
+
+        self.video_progress_status = QLabel("Select an MP4 to begin.")
+        self.video_progress_status.setObjectName("statusHint")
+        video_group_layout.addWidget(self.video_progress_status)
+
+        video_hint = QLabel(
+            "Runs the adaptive pipeline (geometry, lock-on, IQR) and writes "
+            "an annotated MP4 under outputs/."
+        )
+        video_hint.setObjectName("statusHint")
+        video_hint.setWordWrap(True)
+        video_group_layout.addWidget(video_hint)
+
+        video_layout.addWidget(video_group)
+        video_layout.addStretch()
+
+        self.control_tabs.addTab(offline_tab, "Offline & Live")
+        self.control_tabs.addTab(video_tab, "Process MP4 Video")
+        left_layout.addWidget(self.control_tabs)
 
         # ── Right Panel: Telemetry & Terminal ──────────────────────────────
         right_panel = QWidget()
@@ -669,6 +730,13 @@ class PipelineDashboard(QMainWindow):
             project_root=PROJECT_ROOT,
             on_finished=self._on_process_finished,
         )
+        self._processes["video"] = ProcessConsole(
+            tag="video",
+            console=self.console,
+            project_root=PROJECT_ROOT,
+            on_finished=self._on_process_finished,
+            on_progress=self._on_video_progress,
+        )
 
     def _append_system(self, text: str) -> None:
         self.console.appendPlainText(f"[system] {text}")
@@ -705,12 +773,20 @@ class PipelineDashboard(QMainWindow):
         validation_running = self._processes["validation"].is_running
         stream_running = self._processes["stream"].is_running
         receiver_running = self._processes["receiver"].is_running
+        video_running = self._processes["video"].is_running
+        has_video = bool(self.video_path_edit.text().strip())
 
-        self.validation_btn.setEnabled(has_dataset and not validation_running)
-        step3_enabled = has_dataset and not validation_running
+        self.validation_btn.setEnabled(
+            has_dataset and not validation_running and not video_running
+        )
+        step3_enabled = has_dataset and not validation_running and not video_running
         self.stream_btn.setEnabled(step3_enabled and not stream_running)
         self.receiver_btn.setEnabled(step3_enabled or receiver_running)
-        self.stop_btn.setEnabled(stream_running or receiver_running)
+        self.stop_btn.setEnabled(
+            stream_running or receiver_running or video_running
+        )
+        self.video_process_btn.setEnabled(has_video and not video_running)
+        self.mp4_browse_btn.setEnabled(not video_running)
 
     def _validate_network(self) -> bool:
         if not self.ip_edit.text().strip():
@@ -800,6 +876,68 @@ class PipelineDashboard(QMainWindow):
                 return True
         return False
 
+    def _browse_mp4(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select MP4 Video",
+            str(PROJECT_ROOT),
+            "MP4 Video (*.mp4);;All Files (*.*)",
+        )
+        if path:
+            self.video_path_edit.setText(path)
+            self._append_system(f"Selected video: {path}")
+
+    def _reset_video_progress(self) -> None:
+        self.video_progress_bar.setVisible(True)
+        self.video_progress_bar.setRange(0, 100)
+        self.video_progress_bar.setValue(0)
+        self.video_progress_status.setText("Starting video processing…")
+
+    def _on_video_progress(self, current: int, total: int) -> None:
+        if total <= 0:
+            self.video_progress_bar.setRange(0, 0)
+            self.video_progress_status.setText(f"Processing frame {current}…")
+            return
+        self.video_progress_bar.setRange(0, total)
+        self.video_progress_bar.setValue(current)
+        self.video_progress_bar.setFormat("%p%  ·  %v / %m frames")
+        self.video_progress_status.setText(
+            f"Processing frame {current}/{total}…"
+        )
+
+    def _run_video_processing(self) -> None:
+        video_path = self.video_path_edit.text().strip()
+        if not video_path:
+            QMessageBox.warning(self, "No Video", "Select an input MP4 file first.")
+            return
+        video_file = Path(video_path)
+        if not video_file.is_file():
+            QMessageBox.warning(
+                self,
+                "Invalid Video",
+                f"File not found:\n{video_path}",
+            )
+            return
+        if video_file.stat().st_size < 1:
+            QMessageBox.warning(
+                self,
+                "Invalid Video",
+                f"File is empty:\n{video_path}",
+            )
+            return
+
+        self._reset_video_progress()
+        self._update_enablement()
+        self.control_tabs.setCurrentIndex(1)
+
+        args = [
+            str(PROJECT_ROOT / "main.py"),
+            "process-video",
+            "--video",
+            video_path,
+        ]
+        self._processes["video"].start(args)
+
     def _run_validation(self) -> None:
         dataset = self._selected_dataset()
         if dataset is None:
@@ -863,7 +1001,8 @@ class PipelineDashboard(QMainWindow):
 
     def _stop_all(self) -> None:
         for proc in self._processes.values():
-            proc.terminate()
+            if proc.is_running:
+                proc.terminate()
         self.receiver_btn.setText("1. Start Receiver")
         self._set_stream_live(False)
         self._append_system("Stop requested for all processes.")
@@ -910,6 +1049,16 @@ class PipelineDashboard(QMainWindow):
 
         if tag == "receiver":
             self.receiver_btn.setText("1. Start Receiver")
+            self._update_enablement()
+
+        if tag == "video":
+            self.video_progress_bar.setRange(0, 100)
+            self.video_progress_bar.setValue(100)
+            self.video_progress_status.setText(
+                "Video processing complete."
+                if exit_code == 0
+                else "Video processing finished with errors."
+            )
             self._update_enablement()
 
     def closeEvent(self, event: QCloseEvent) -> None:

@@ -52,7 +52,7 @@ class BackFacePipeline:
                 udp_ip=None,
             )
         else:
-            self._streaming.config = self.config
+            self._streaming.apply_config(self.config)
         return self._streaming
 
     def _draw_preview(
@@ -429,9 +429,22 @@ class StreamingPipeline:
 
         self.last_valid_packet: dict | None = None
         self.invalid_frames_count = 0
-        self.udp_seq = 0
         self._sequence_size: tuple[int, int] | None = None
         self._read_fail_count = 0
+
+    def apply_config(self, config: VisionConfig) -> None:
+        """Propagate config to all frame-processing submodules."""
+        self.config = config
+        self.extractor.config = config
+        self.bit_extractor.config = config
+        self.legacy_selector.config = config
+        self.matcher.config = config
+        self.matcher.tracker.config = config
+        self.matcher.buffers.config = config
+        self.matcher.face_decoder.config = config
+        self.matcher.face_decoder._decoder.config = config
+        self.geometry.config = config
+        self.packet_builder.config = config
 
     def reset(self) -> None:
         self.matcher.reset()
@@ -442,7 +455,6 @@ class StreamingPipeline:
         self.error_y_lpf.reset()
         self.last_valid_packet = None
         self.invalid_frames_count = 0
-        self.udp_seq = 0
         self._sequence_size = None
         self._read_fail_count = 0
 

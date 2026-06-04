@@ -109,6 +109,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Process frames as fast as possible (no FPS sleep).",
     )
 
+    p_video = sub.add_parser(
+        "process-video",
+        help="Process an MP4 through the adaptive pipeline and write annotated HUD video.",
+    )
+    p_video.add_argument(
+        "--video",
+        required=True,
+        help="Path to input .mp4 file.",
+    )
+    p_video.add_argument(
+        "--output",
+        default=None,
+        help="Output .mp4 path (default: outputs/<stem>_annotated.mp4).",
+    )
+
     return parser
 
 
@@ -225,6 +240,25 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if streaming.udp_sender is not None:
                 streaming.udp_sender.close()
+        return 0
+
+    if args.command == "process-video":
+        from tools.video_processor import process_video
+
+        video_path = Path(args.video).resolve()
+        output_path = Path(args.output).resolve() if args.output else None
+        root = Path(__file__).resolve().parent
+        try:
+            out = process_video(
+                video_path,
+                output_path,
+                project_root=root,
+                outputs_dir=args.outputs_dir,
+            )
+            print("Annotated video:", out)
+        except (FileNotFoundError, RuntimeError) as exc:
+            print("Error:", exc, file=sys.stderr)
+            return 1
         return 0
 
     parser.print_help()
